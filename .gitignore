@@ -1,3 +1,12 @@
+### Added by me
+
+.vscode/
+nohup.out
+*.pyc
+basicsr.egg-info/
+expriements/
+**/__pycache__/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
