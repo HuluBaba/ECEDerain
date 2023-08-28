@@ -6,6 +6,10 @@ nohup.out
 basicsr.egg-info/
 expriements/
 **/__pycache__/
+Options/
+!Options/Deraining.yml
+train.sh
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
