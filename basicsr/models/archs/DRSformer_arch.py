@@ -484,7 +484,7 @@ if __name__ == '__main__':
     model = DRSformer()
    # output = model(input)
 
-    from fvcore.nn import FlopCountAnalysis, parameter_count_table
+    # from fvcore.nn import FlopCountAnalysis, parameter_count_table
 
-    flops = FlopCountAnalysis(model, input)
-    print("FLOPs: ", flops.total())
+    # flops = FlopCountAnalysis(model, input)
+    # print("FLOPs: ", flops.total())
