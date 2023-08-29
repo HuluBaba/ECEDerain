@@ -101,10 +101,10 @@ class LowThresholdDC_test_3(nn.Module):
         self.conv = nn.Conv2d(inchannel,inchannel,patch_size,1,'same',groups=inchannel)
         self.lhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
                                     nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
         self.hhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
                                     nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
         self.comprehensive = nn.Sequential(nn.Sigmoid(),
                                             nn.Conv2d(2*inchannel,inchannel,1,1,0),
                                             nn.ReLU())

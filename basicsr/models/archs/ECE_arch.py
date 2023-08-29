@@ -325,13 +325,22 @@ class LowThresholdDC_test_3(nn.Module):
         self.conv = nn.Conv2d(inchannel,inchannel,patch_size,1,'same',groups=inchannel)
         self.lhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
                                     nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
         self.hhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
                                     nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
         self.comprehensive = nn.Sequential(nn.Sigmoid(),
                                             nn.Conv2d(2*inchannel,inchannel,1,1,0),
                                             nn.ReLU())
+        
+    def forward(self,x):
+        low_signal = self.conv(x)
+        high_signal = x - low_signal
+        low_signal = self.lhandle(low_signal)
+        high_signal = self.hhandle(high_signal)
+        out = self.comprehensive(torch.cat([low_signal,high_signal],dim=1))
+        return out
+
 LowThresholdDC = LowThresholdDC_test_3
 
 class HighThresholdDC(nn.Module):
@@ -612,6 +621,8 @@ class Dehazer(nn.Module):
                  depth_est=False):
         super(Dehazer,self).__init__()
         
+        # confidence
+        self.confidence = nn.Parameter(torch.ones(3)*0.01)
         # dark channel piror
         self.kernel_size = kernel_size
         self.pad = nn.ReflectionPad2d(padding=kernel_size//2)
@@ -676,7 +687,8 @@ class Dehazer(nn.Module):
         tiledt = refined_transmission.repeat(1,3,1,1)
         
         dehaze_images = (image - airlight)*1.0/tiledt + airlight
-        
+        dehaze_images = (1-self.confidence)[None,:,None,None]*image + self.confidence[None,:,None,None]*dehaze_images
+
         # recover scaled depth or not
         if self.depth_est:
             depth = recover_depth(refined_transmission)
@@ -938,12 +950,12 @@ class DownRes(nn.Module):
 
 
 if __name__=="__main__":
-    # input_tensor = torch.rand((4,3,256,256))
-    # print(input_tensor.shape)
-    # model = ECE()
+    input_tensor = torch.rand((4,3,256,256))
+    print(input_tensor.shape)
+    model = ECE()
     
-    # output_tensor = model(input_tensor)
-    # print(output_tensor.shape)
+    output_tensor = model(input_tensor)
+    print(output_tensor.shape)
     def getModelSize(model):
         param_size = 0
         param_sum = 0
@@ -959,34 +971,34 @@ if __name__=="__main__":
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
-    model=ECE()
     getModelSize(model)
-    # model=Attention(dim,1,False)
-    # getModelSize(model)
-    # model=Attention(dim*8,8,False)
-    # getModelSize(model)
-    # model=TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
-    #                          LayerNorm_type='WithBias')
-    # getModelSize(model)
-    # model=TransformerBlock(dim=dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
-    #                          LayerNorm_type='WithBias')
-    # getModelSize(model)
-    # model=DecoupleConv(dim, dim, wave_vector_threshold=2)
-    # getModelSize(model)
-    # model=DecoupleConv(dim*4, dim*4, wave_vector_threshold=4)
-    # getModelSize(model)
-    # model=DecoupleConv(dim*8, dim*8, wave_vector_threshold=4)
-    # getModelSize(model)
-    # model=Error_Predictor()
-    # getModelSize(model)
-    # model=Compensator_predicter()
-    # getModelSize(model)
-    # model=UpRes()
-    # getModelSize(model)
-    # model=ConvModule()
-    # getModelSize(model)
-    # model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
-    # getModelSize(model)
+    dim=32
+    model=Attention(dim,1,False)
+    getModelSize(model)
+    model=Attention(dim*8,8,False)
+    getModelSize(model)
+    model=TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
+                             LayerNorm_type='WithBias')
+    getModelSize(model)
+    model=TransformerBlock(dim=dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
+                             LayerNorm_type='WithBias')
+    getModelSize(model)
+    model=DecoupleConv(dim, dim, wave_vector_threshold=2)
+    getModelSize(model)
+    model=DecoupleConv(dim*4, dim*4, wave_vector_threshold=4)
+    getModelSize(model)
+    model=DecoupleConv(dim*8, dim*8, wave_vector_threshold=4)
+    getModelSize(model)
+    model=Error_Predictor()
+    getModelSize(model)
+    model=Compensator_predicter()
+    getModelSize(model)
+    model=UpRes()
+    getModelSize(model)
+    model=ConvModule()
+    getModelSize(model)
+    model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
+    getModelSize(model)
 
 # model=ECE()
 # model.to('cuda')
