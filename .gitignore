@@ -9,7 +9,9 @@ expriements/
 Options/
 !Options/Deraining.yml
 train.sh
-
+tb_logger/
+*.pth
+*.state
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

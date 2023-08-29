@@ -207,7 +207,7 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class DRSformer(nn.Module):
+class ECE(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -219,7 +219,7 @@ class DRSformer(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSformer, self).__init__()
+        super(ECE, self).__init__()
 
         # self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -314,28 +314,25 @@ class DRSformer(nn.Module):
 
 
 ## Frequence Decouple Conv
-class LowThresholdDC(nn.Module):
+class LowThresholdDC_test_3(nn.Module):
+    '''
+     f-space decouple with step size by conv
+     recombine with depth-wise conv and point-wise conv
+    '''
     def __init__(self, inchannel, patch_size=2):
-        super(LowThresholdDC, self).__init__()
-
-        self.ap = nn.AdaptiveAvgPool2d((1,1))
-
-        self.patch_size = patch_size
-        self.channel = inchannel * patch_size**2
-        self.h = nn.Parameter(torch.zeros(self.channel))
-        self.l = nn.Parameter(torch.zeros(self.channel))
-
-    def forward(self, x):
-
-        patch_x = rearrange(x, 'b c (p1 w1) (p2 w2) -> b c p1 w1 p2 w2', p1=self.patch_size, p2=self.patch_size)
-        patch_x = rearrange(patch_x, ' b c p1 w1 p2 w2 -> b (c p1 p2) w1 w2', p1=self.patch_size, p2=self.patch_size)
-
-        low = self.ap(patch_x)
-        high = (patch_x - low) * self.h[None, :, None, None]
-        out = high + low * self.l[None, :, None, None]
-        out = rearrange(out, 'b (c p1 p2) w1 w2 -> b c (p1 w1) (p2 w2)', p1=self.patch_size, p2=self.patch_size)
-
-        return out
+        super(LowThresholdDC_test_3,self).__init__()
+        self.channel=inchannel
+        self.conv = nn.Conv2d(inchannel,inchannel,patch_size,1,'same',groups=inchannel)
+        self.lhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
+                                    nn.ReLU(),
+                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+        self.hhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
+                                    nn.ReLU(),
+                                    nn.Conv2d(inchannel,inchannel,3,1,1))
+        self.comprehensive = nn.Sequential(nn.Sigmoid(),
+                                            nn.Conv2d(2*inchannel,inchannel,1,1,0),
+                                            nn.ReLU())
+LowThresholdDC = LowThresholdDC_test_3
 
 class HighThresholdDC(nn.Module):
     def __init__(self, in_channel) -> None:
@@ -943,7 +940,7 @@ class DownRes(nn.Module):
 if __name__=="__main__":
     # input_tensor = torch.rand((4,3,256,256))
     # print(input_tensor.shape)
-    # model = DRSformer()
+    # model = ECE()
     
     # output_tensor = model(input_tensor)
     # print(output_tensor.shape)
@@ -962,7 +959,7 @@ if __name__=="__main__":
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
-    model=DRSformer()
+    model=ECE()
     getModelSize(model)
     # model=Attention(dim,1,False)
     # getModelSize(model)
@@ -991,7 +988,7 @@ if __name__=="__main__":
     # model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
     # getModelSize(model)
 
-# model=DRSformer()
+# model=ECE()
 # model.to('cuda')
 # from torchsummary import summary
 # summary(model, input_size=(3, 128, 128), batch_size=1)

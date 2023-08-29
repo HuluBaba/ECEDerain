@@ -1,5 +1,5 @@
 # general settings
-name: Deraining_DRSformer
+name: Deraining_ECE
 model_type: ImageCleanModel
 scale: 1
 num_gpu: 2
@@ -43,10 +43,10 @@ datasets:
 
 # network structures
 network_g:
-  type: DRSformer
+  type: ECE
   inp_channels: 3
   out_channels: 3
-  dim: 48
+  dim: 32
   num_blocks: [4,6,6,8]
   heads: [1,2,4,8]
   ffn_expansion_factor: 2.66
