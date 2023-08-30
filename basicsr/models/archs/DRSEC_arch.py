@@ -246,7 +246,7 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class ECE(nn.Module):
+class DRSEC(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -258,7 +258,7 @@ class ECE(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(ECE, self).__init__()
+        super(DRSEC, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -799,7 +799,7 @@ class OverlapPatchEmbed(nn.Module):
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
-    model = ECE()
+    model = DRSEC()
     
     output_tensor = model(input_tensor)
     print(output_tensor.shape)
@@ -847,7 +847,7 @@ if __name__=="__main__":
     # model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
     # getModelSize(model)
 
-# model=ECE()
+# model=DRSEC()
 # model.to('cuda')
 # from torchsummary import summary
 # summary(model, input_size=(3, 128, 128), batch_size=1)
