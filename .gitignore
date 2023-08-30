@@ -12,6 +12,7 @@ train.sh
 tb_logger/
 *.pth
 *.state
+basicsr/versions.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
