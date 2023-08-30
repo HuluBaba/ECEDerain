@@ -180,7 +180,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = Attention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = FeedForward(dim, dim)
+        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
