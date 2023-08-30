@@ -133,6 +133,45 @@ class Attention(nn.Module):
         out = self.project_out(out)
         return out
 
+class FeedForward(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor, bias):
+        super(FeedForward, self).__init__()
+
+        hidden_features = int(dim * ffn_expansion_factor)
+
+        self.project_in = nn.Conv2d(dim, hidden_features * 2, kernel_size=1, bias=bias)
+
+        self.dwconv3x3 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1, groups=hidden_features * 2, bias=bias)
+        self.dwconv5x5 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=5, stride=1, padding=2, groups=hidden_features * 2, bias=bias)
+        self.relu3 = nn.ReLU()
+        self.relu5 = nn.ReLU()
+
+        self.dwconv3x3_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=3, stride=1, padding=1, groups=hidden_features , bias=bias)
+        self.dwconv5x5_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=5, stride=1, padding=2, groups=hidden_features , bias=bias)
+
+        self.relu3_1 = nn.ReLU()
+        self.relu5_1 = nn.ReLU()
+
+        self.project_out = nn.Conv2d(hidden_features * 2, dim, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        x = self.project_in(x)
+        x1_3, x2_3 = self.relu3(self.dwconv3x3(x)).chunk(2, dim=1)
+        x1_5, x2_5 = self.relu5(self.dwconv5x5(x)).chunk(2, dim=1)
+
+        x1 = torch.cat([x1_3, x1_5], dim=1)
+        x2 = torch.cat([x2_3, x2_5], dim=1)
+
+        x1 = self.relu3_1(self.dwconv3x3_1(x1))
+        x2 = self.relu5_1(self.dwconv5x5_1(x2))
+
+        x = torch.cat([x1, x2], dim=1)
+
+        x = self.project_out(x)
+
+        return x
+
+
 ##  Sparse Transformer Block (STB) 
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
@@ -141,7 +180,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = Attention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = DecoupleConv(dim, dim)
+        self.ffn = FeedForward(dim, dim)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
@@ -221,10 +260,10 @@ class ECE(nn.Module):
 
         super(ECE, self).__init__()
 
-        # self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
+        self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
-        self.encoder_level0 = UpRes(out_ch = dim)
-        # self.encoder_level0 = subnet(dim)  ## We do not use MEFC for training Rain200L and SPA-Data
+        # self.encoder_level0 = UpRes(out_ch = dim)
+        self.encoder_level0 = subnet(dim)  ## We do not use MEFC for training Rain200L and SPA-Data
 
         self.encoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
@@ -266,15 +305,14 @@ class ECE(nn.Module):
         self.outconv = DownRes(in_ch = 2*dim)
         self.err_predictor = Error_Predictor()
         self.com_predictor = Compensator_predicter()
-        self.dehazer = Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
         # self.refinement = subnet(dim=int(dim*2**1)) ## We do not use MEFC for training Rain200L and SPA-Data
 
         self.output = nn.Conv2d(int(dim * 2 ** 1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
     def forward(self, inp_img):
 
-        # inp_enc_level1 = self.patch_embed(inp_img)
-        inp_enc_level0 = self.encoder_level0(inp_img) ## We do not use MEFC for training Rain200L and SPA-Data
+        inp_enc_level1 = self.patch_embed(inp_img)
+        inp_enc_level0 = self.encoder_level0(inp_enc_level1) ## We do not use MEFC for training Rain200L and SPA-Data
         out_enc_level1 = self.encoder_level1(inp_enc_level0)  
 
         inp_enc_level2 = self.down1_2(out_enc_level1)
@@ -304,7 +342,7 @@ class ECE(nn.Module):
         pred_err = self.err_predictor(pred_b, inp_img)
         pred_com = self.com_predictor(pred_b)
         derain_output = pred_b - pred_err*pred_com
-        dehaze_output = self.dehazer(derain_output)
+        dehaze_output = derain_output
         output = dehaze_output + inp_img
         # out_dec_level1 = self.refinement(out_dec_level1) ## We do not use MEFC for training Rain200L and SPA-Data
 
@@ -312,69 +350,6 @@ class ECE(nn.Module):
 
         return output
 
-
-## Frequence Decouple Conv
-class LowThresholdDC_test_3(nn.Module):
-    '''
-     f-space decouple with step size by conv
-     recombine with depth-wise conv and point-wise conv
-    '''
-    def __init__(self, inchannel, patch_size=2):
-        super(LowThresholdDC_test_3,self).__init__()
-        self.channel=inchannel
-        self.conv = nn.Conv2d(inchannel,inchannel,patch_size,1,'same',groups=inchannel)
-        self.lhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
-                                    nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
-        self.hhandle = nn.Sequential(nn.Conv2d(inchannel,inchannel,1,1,0),
-                                    nn.ReLU(),
-                                    nn.Conv2d(inchannel,inchannel,3,1,1,groups=inchannel))
-        self.comprehensive = nn.Sequential(nn.Sigmoid(),
-                                            nn.Conv2d(2*inchannel,inchannel,1,1,0),
-                                            nn.ReLU())
-        
-    def forward(self,x):
-        low_signal = self.conv(x)
-        high_signal = x - low_signal
-        low_signal = self.lhandle(low_signal)
-        high_signal = self.hhandle(high_signal)
-        out = self.comprehensive(torch.cat([low_signal,high_signal],dim=1))
-        return out
-
-LowThresholdDC = LowThresholdDC_test_3
-
-class HighThresholdDC(nn.Module):
-    def __init__(self, in_channel) -> None:
-        super(HighThresholdDC , self).__init__()
-
-        self.fscale_d = nn.Parameter(torch.zeros(in_channel), requires_grad=True)
-        self.fscale_h = nn.Parameter(torch.zeros(in_channel), requires_grad=True)
-        self.gap = nn.AdaptiveAvgPool2d((1,1))
-
-    def forward(self, x):
-        x_d = self.gap(x)
-        x_h = (x - x_d) * (self.fscale_h[None, :, None, None] + 1.)
-        x_d = x_d  * self.fscale_d[None, :, None, None]
-        return x_d + x_h
-
-class DecoupleConv(nn.Module):
-    def __init__(self, in_ch, out_ch, wave_vector_threshold=8):
-        super(DecoupleConv, self).__init__()
-        self.conv1 = nn.Conv2d(in_ch, 2*out_ch, 3, 1, 1)
-        self.conv2 = nn.Conv2d(2*out_ch, out_ch, 3, 1, 1)
-        self.ltdc = LowThresholdDC(out_ch, patch_size=wave_vector_threshold)
-        self.htdc = HighThresholdDC(out_ch)
-    
-    def forward(self, x):
-        input = x
-        x = self.conv1(x)
-        ltdc_input , htdc_input = torch.chunk(x, 2, dim=1)
-        ltdc_output = self.ltdc(ltdc_input)
-        htdc_output = self.htdc(htdc_input)
-        x = torch.cat([ltdc_output, htdc_output], dim=1)
-        x = self.conv2(x)
-        x = x + input
-        return x
 
 
 ## Error Compensator
@@ -613,281 +588,6 @@ class Compensator_predicter(torch.nn.Module):
         return x
 
 
-## Dehaze
-class Dehazer(nn.Module):
-    def __init__(self,kernel_size,top_candidates_ratio,omega,
-                 radius, eps,
-                 open_threshold=True,
-                 depth_est=False):
-        super(Dehazer,self).__init__()
-        
-        # confidence
-        self.confidence = nn.Parameter(torch.ones(3)*0.01)
-        # dark channel piror
-        self.kernel_size = kernel_size
-        self.pad = nn.ReflectionPad2d(padding=kernel_size//2)
-        self.unfold = nn.Unfold(kernel_size=(self.kernel_size,self.kernel_size),padding=0)
-        
-        # airlight estimation.
-        self.top_candidates_ratio = top_candidates_ratio
-        self.open_threshold = open_threshold
-        
-        # raw transmission estimation 
-        self.omega = omega
-        
-        # image guided filtering
-        self.radius = radius
-        self.eps = eps
-        self.guide_filter = GuidedFilter2d(radius=self.radius,eps= self.eps)
-        
-        self.depth_est = depth_est
-        
-    def forward(self,image):
-        
-        # compute the dark channel piror of given image.
-        b,c,h,w = image.shape
-        image_pad = self.pad(image)
-        local_patches = self.unfold(image_pad)
-        dc,dc_index = torch.min(local_patches,dim=1,keepdim=True)
-        dc = dc.view(b,1,h,w)
-        dc_vis = dc
-        # airlight estimation.
-        top_candidates_nums = int(h*w*self.top_candidates_ratio)
-        dc = dc.view(b,1,-1) # dark channels
-        searchidx = torch.argsort(-dc,dim=-1)[:,:,:top_candidates_nums]
-        searchidx = searchidx.repeat(1,3,1)
-        image_ravel = image.view(b,3,-1)
-        value = torch.gather(image_ravel,dim=2,index=searchidx)
-        airlight,image_index = torch.max(value,dim =-1,keepdim=True)
-        airlight = airlight.squeeze(-1)
-        if self.open_threshold:
-            airlight = torch.clamp(airlight,max=220)
-        
-        # get the raw transmission
-        airlight = airlight.unsqueeze(-1).unsqueeze(-1)
-        processed = image/airlight
-        
-        processed_pad = self.pad(processed)
-        local_patches_processed = self.unfold(processed_pad)
-        dc_processed, dc_index_processed = torch.min(local_patches_processed,dim=1,keepdim=True)
-        dc_processed = dc_processed.view(b,1,h,w)
-        
-        raw_t = 1.0 - self.omega * dc_processed
-        if self.open_threshold:
-            raw_t = torch.clamp(raw_t,min=0.2)
-            
-        # raw transmission guided filtering.
-        # refined_tranmission = soft_matting(image_data_tensor,raw_transmission,r=40,eps=1e-3)
-        normalized_img = simple_image_normalization(image)
-        refined_transmission = self.guide_filter(raw_t,normalized_img)
-        
-        
-        # recover image: get radiance.
-        image = image.float()
-        tiledt = refined_transmission.repeat(1,3,1,1)
-        
-        dehaze_images = (image - airlight)*1.0/tiledt + airlight
-        dehaze_images = (1-self.confidence)[None,:,None,None]*image + self.confidence[None,:,None,None]*dehaze_images
-
-        # recover scaled depth or not
-        if self.depth_est:
-            depth = recover_depth(refined_transmission)
-            # return dehaze_images, dc_vis,airlight,raw_t,refined_transmission,depth
-            return dehaze_images
-        
-        return dehaze_images
-        # return dehaze_images, dc_vis,airlight,raw_t,refined_transmission
-
-def simple_image_normalization(tensor):
-    b,c,h,w = tensor.shape
-    tensor_ravel = tensor.view(b,3,-1)
-    image_min,_ = torch.min(tensor_ravel,dim=-1,keepdim=True)
-    image_max,_ = torch.max(tensor_ravel,dim=-1,keepdim=True)
-    image_min = image_min.unsqueeze(-1)
-    image_max = image_max.unsqueeze(-1)
-    
-    normalized_image = (tensor - image_min) /(image_max-image_min)
-    return normalized_image
-
-def recover_depth(transmission,beta=0.001):
-    negative_depth = torch.log(transmission)
-    return (-negative_depth)/beta
-
-class GuidedFilter2d(nn.Module):
-    def __init__(self, radius: int, eps: float):
-        super().__init__()
-        self.r = radius
-        self.eps = eps
-
-    def forward(self, x, guide):
-        if guide.shape[1] == 3:
-            return guidedfilter2d_color(guide, x, self.r, self.eps)
-        elif guide.shape[1] == 1:
-            return guidedfilter2d_gray(guide, x, self.r, self.eps)
-        else:
-            raise NotImplementedError
-
-def guidedfilter2d_color(guide, src, radius, eps, scale=None):
-    """guided filter for a color guide image
-    
-    Parameters
-    -----
-    guide: (B, 3, H, W)-dim torch.Tensor
-        guide image
-    src: (B, C, H, W)-dim torch.Tensor
-        filtering image
-    radius: int
-        filter radius
-    eps: float
-        regularization coefficient
-    """
-    assert guide.shape[1] == 3
-    if src.ndim == 3:
-        src = src[:, None]
-    if scale is not None:
-        guide_sub = guide.clone()
-        src = F.interpolate(src, scale_factor=1./scale, mode="nearest")
-        guide = F.interpolate(guide, scale_factor=1./scale, mode="nearest")
-        radius = radius // scale
-
-    guide_r, guide_g, guide_b = torch.chunk(guide, 3, 1) # b x 1 x H x W
-    ones = torch.ones_like(guide_r)
-    N = boxfilter2d(ones, radius)
-
-    mean_I = boxfilter2d(guide, radius) / N # b x 3 x H x W
-    mean_I_r, mean_I_g, mean_I_b = torch.chunk(mean_I, 3, 1) # b x 1 x H x W
-
-    mean_p = boxfilter2d(src, radius) / N # b x C x H x W
-
-    mean_Ip_r = boxfilter2d(guide_r * src, radius) / N # b x C x H x W
-    mean_Ip_g = boxfilter2d(guide_g * src, radius) / N # b x C x H x W
-    mean_Ip_b = boxfilter2d(guide_b * src, radius) / N # b x C x H x W
-
-    cov_Ip_r = mean_Ip_r - mean_I_r * mean_p # b x C x H x W
-    cov_Ip_g = mean_Ip_g - mean_I_g * mean_p # b x C x H x W
-    cov_Ip_b = mean_Ip_b - mean_I_b * mean_p # b x C x H x W
-
-    var_I_rr = boxfilter2d(guide_r * guide_r, radius) / N - mean_I_r * mean_I_r + eps # b x 1 x H x W
-    var_I_rg = boxfilter2d(guide_r * guide_g, radius) / N - mean_I_r * mean_I_g # b x 1 x H x W
-    var_I_rb = boxfilter2d(guide_r * guide_b, radius) / N - mean_I_r * mean_I_b # b x 1 x H x W
-    var_I_gg = boxfilter2d(guide_g * guide_g, radius) / N - mean_I_g * mean_I_g + eps # b x 1 x H x W
-    var_I_gb = boxfilter2d(guide_g * guide_b, radius) / N - mean_I_g * mean_I_b # b x 1 x H x W
-    var_I_bb = boxfilter2d(guide_b * guide_b, radius) / N - mean_I_b * mean_I_b + eps # b x 1 x H x W
-
-    # determinant
-    cov_det = var_I_rr * var_I_gg * var_I_bb \
-        + var_I_rg * var_I_gb * var_I_rb \
-            + var_I_rb * var_I_rg * var_I_gb \
-                - var_I_rb * var_I_gg * var_I_rb \
-                    - var_I_rg * var_I_rg * var_I_bb \
-                        - var_I_rr * var_I_gb * var_I_gb # b x 1 x H x W
-
-    # inverse
-    inv_var_I_rr = (var_I_gg * var_I_bb - var_I_gb * var_I_gb) / cov_det # b x 1 x H x W
-    inv_var_I_rg = - (var_I_rg * var_I_bb - var_I_rb * var_I_gb) / cov_det # b x 1 x H x W
-    inv_var_I_rb = (var_I_rg * var_I_gb - var_I_rb * var_I_gg) / cov_det # b x 1 x H x W
-    inv_var_I_gg = (var_I_rr * var_I_bb - var_I_rb * var_I_rb) / cov_det # b x 1 x H x W
-    inv_var_I_gb = - (var_I_rr * var_I_gb - var_I_rb * var_I_rg) / cov_det # b x 1 x H x W
-    inv_var_I_bb = (var_I_rr * var_I_gg - var_I_rg * var_I_rg) / cov_det # b x 1 x H x W
-
-    inv_sigma = torch.stack([
-        torch.stack([inv_var_I_rr, inv_var_I_rg, inv_var_I_rb], 1),
-        torch.stack([inv_var_I_rg, inv_var_I_gg, inv_var_I_gb], 1),
-        torch.stack([inv_var_I_rb, inv_var_I_gb, inv_var_I_bb], 1)
-    ], 1).squeeze(-3) # b x 3 x 3 x H x W
-
-    cov_Ip = torch.stack([cov_Ip_r, cov_Ip_g, cov_Ip_b], 1) # b x 3 x C x H x W
-
-    a = torch.einsum("bichw,bijhw->bjchw", (cov_Ip, inv_sigma))
-    b = mean_p - a[:, 0] * mean_I_r - a[:, 1] * mean_I_g - a[:, 2] * mean_I_b # b x C x H x W
-
-    mean_a = torch.stack([boxfilter2d(a[:, i], radius) / N for i in range(3)], 1)
-    mean_b = boxfilter2d(b, radius) / N
-
-    if scale is not None:
-        guide = guide_sub
-        mean_a = torch.stack([F.interpolate(mean_a[:, i], guide.shape[-2:], mode='bilinear') for i in range(3)], 1)
-        mean_b = F.interpolate(mean_b, guide.shape[-2:], mode='bilinear')
-
-    q = torch.einsum("bichw,bihw->bchw", (mean_a, guide)) + mean_b
-
-    return q
-
-def guidedfilter2d_gray(guide, src, radius, eps, scale=None):
-    """guided filter for a gray scale guide image
-    
-    Parameters
-    -----
-    guide: (B, 1, H, W)-dim torch.Tensor
-        guide image
-    src: (B, C, H, W)-dim torch.Tensor
-        filtering image
-    radius: int
-        filter radius
-    eps: float
-        regularization coefficient
-    """
-    if guide.ndim == 3:
-        guide = guide[:, None]
-    if src.ndim == 3:
-        src = src[:, None]
-
-    if scale is not None:
-        guide_sub = guide.clone()
-        src = F.interpolate(src, scale_factor=1./scale, mode="nearest")
-        guide = F.interpolate(guide, scale_factor=1./scale, mode="nearest")
-        radius = radius // scale
-
-    ones = torch.ones_like(guide)
-    N = boxfilter2d(ones, radius)
-
-    mean_I = boxfilter2d(guide, radius) / N
-    mean_p = boxfilter2d(src, radius) / N
-    mean_Ip = boxfilter2d(guide*src, radius) / N
-    cov_Ip = mean_Ip - mean_I * mean_p
-
-    mean_II = boxfilter2d(guide*guide, radius) / N
-    var_I = mean_II - mean_I * mean_I
-
-    a = cov_Ip / (var_I + eps)
-    b = mean_p - a * mean_I
-
-    mean_a = boxfilter2d(a, radius) / N
-    mean_b = boxfilter2d(b, radius) / N
-
-    if scale is not None:
-        guide = guide_sub
-        mean_a = F.interpolate(mean_a, guide.shape[-2:], mode='bilinear')
-        mean_b = F.interpolate(mean_b, guide.shape[-2:], mode='bilinear')
-
-    q = mean_a * guide + mean_b
-    return q
-
-def _diff_x(src, r):
-    cum_src = src.cumsum(-2)
-
-    left = cum_src[..., r:2*r + 1, :]
-    middle = cum_src[..., 2*r + 1:, :] - cum_src[..., :-2*r - 1, :]
-    right = cum_src[..., -1:, :] - cum_src[..., -2*r - 1:-r - 1, :]
-
-    output = torch.cat([left, middle, right], -2)
-
-    return output
-
-def _diff_y(src, r):
-    cum_src = src.cumsum(-1)
-
-    left = cum_src[..., r:2*r + 1]
-    middle = cum_src[..., 2*r + 1:] - cum_src[..., :-2*r - 1]
-    right = cum_src[..., -1:] - cum_src[..., -2*r - 1:-r - 1]
-
-    output = torch.cat([left, middle, right], -1)
-
-    return output
-
-def boxfilter2d(src, radius):
-    return _diff_y(_diff_x(src, radius), radius)
-
 ## NewRes
 class ResUnit(nn.Module):
     def __init__(self, channels):
@@ -949,6 +649,153 @@ class DownRes(nn.Module):
         return x
 
 
+## Original Expert layer
+class subnet(nn.Module):
+    def __init__(self, dim, layer_num=1, steps=4):
+        super(subnet,self).__init__()
+
+        self._C = dim
+        self.num_ops = len(Operations)
+        self._layer_num = layer_num
+        self._steps = steps
+
+        self.layers = nn.ModuleList()
+        for _ in range(self._layer_num):
+            attention = OALayer(self._C, self._steps, self.num_ops)
+            self.layers += [attention]
+            layer = GroupOLs(steps, self._C)
+            self.layers += [layer]
+
+    def forward(self, x):
+    
+        for _, layer in enumerate(self.layers):
+            if isinstance(layer, OALayer):
+                weights = layer(x)
+                weights = F.softmax(weights, dim=-1)
+            else:
+                x = layer(x, weights)
+
+        return x
+
+class OperationLayer(nn.Module):
+    def __init__(self, C, stride):
+        super(OperationLayer, self).__init__()
+        self._ops = nn.ModuleList()
+        for o in Operations:
+            op = OPS[o](C, stride, False)
+            self._ops.append(op)
+
+        self._out = nn.Sequential(nn.Conv2d(C * len(Operations), C, 1, padding=0, bias=False), nn.ReLU())
+
+    def forward(self, x, weights):
+        weights = weights.transpose(1, 0)
+        states = []
+        for w, op in zip(weights, self._ops):
+            states.append(op(x) * w.view([-1, 1, 1, 1]))
+        return self._out(torch.cat(states[:], dim=1))
+
+class GroupOLs(nn.Module):
+    def __init__(self, steps, C):
+        super(GroupOLs, self).__init__()
+        self.preprocess = ReLUConv(C, C, 1, 1, 0, affine=False)
+        self._steps = steps
+        self._ops = nn.ModuleList()
+        self.relu = nn.ReLU()
+        stride = 1
+
+        for _ in range(self._steps):
+            op = OperationLayer(C, stride)
+            self._ops.append(op)
+
+    def forward(self, s0, weights):
+        s0 = self.preprocess(s0)
+        for i in range(self._steps):
+            res = s0
+            s0 = self._ops[i](s0, weights[:, i, :])
+            s0 = self.relu(s0 + res)
+        return s0
+
+class OALayer(nn.Module):
+    def __init__(self, channel, k, num_ops):
+        super(OALayer, self).__init__()
+        self.k = k
+        self.num_ops = num_ops
+        self.output = k * num_ops
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.ca_fc = nn.Sequential(
+            nn.Linear(channel, self.output * 2),
+            nn.ReLU(),
+            nn.Linear(self.output * 2, self.k * self.num_ops))
+
+    def forward(self, x):
+        y = self.avg_pool(x)
+        y = y.view(x.size(0), -1)
+        y = self.ca_fc(y)
+        y = y.view(-1, self.k, self.num_ops)
+        return y
+
+Operations = [
+    'sep_conv_1x1',
+    'sep_conv_3x3',
+    'sep_conv_5x5',
+    'sep_conv_7x7',
+    'dil_conv_3x3',
+    'dil_conv_5x5',
+    'dil_conv_7x7',
+    'avg_pool_3x3'
+]
+
+OPS = {
+    'avg_pool_3x3' : lambda C, stride, affine: nn.AvgPool2d(3, stride=stride, padding=1, count_include_pad=False),
+    'sep_conv_1x1' : lambda C, stride, affine: SepConv(C, C, 1, stride, 0, affine=affine),
+    'sep_conv_3x3' : lambda C, stride, affine: SepConv(C, C, 3, stride, 1, affine=affine),
+    'sep_conv_5x5' : lambda C, stride, affine: SepConv(C, C, 5, stride, 2, affine=affine),
+    'sep_conv_7x7' : lambda C, stride, affine: SepConv(C, C, 7, stride, 3, affine=affine),
+    'dil_conv_3x3' : lambda C, stride, affine: DilConv(C, C, 3, stride, 2, 2, affine=affine),
+    'dil_conv_5x5' : lambda C, stride, affine: DilConv(C, C, 5, stride, 4, 2, affine=affine),
+    'dil_conv_7x7' : lambda C, stride, affine: DilConv(C, C, 7, stride, 6, 2, affine=affine),
+}
+
+class DilConv(nn.Module):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation, affine=True):
+        super(DilConv, self).__init__()
+        self.op = nn.Sequential(
+            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=C_in, bias=False),
+            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),)
+
+    def forward(self, x):
+        return self.op(x)
+
+class SepConv(nn.Module):
+    def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
+        super(SepConv, self).__init__()
+        self.op = nn.Sequential(
+            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride, padding=padding, groups=C_in, bias=False),
+            nn.Conv2d(C_in, C_in, kernel_size=1, padding=0, bias=False),
+            nn.ReLU(inplace=False),
+            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=1, padding=padding, groups=C_in, bias=False),
+            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),)
+
+    def forward(self, x):
+        return self.op(x)
+
+
+## inConv
+class OverlapPatchEmbed(nn.Module):
+    def __init__(self, in_c=3, embed_dim=48, bias=False):
+        super(OverlapPatchEmbed, self).__init__()
+
+        self.proj = nn.Conv2d(in_c, embed_dim, kernel_size=3, stride=1, padding=1, bias=bias)
+
+    def forward(self, x):
+        x = self.proj(x)
+
+        return x
+
+
+
+
+
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
@@ -972,33 +819,33 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     getModelSize(model)
-    dim=32
-    model=Attention(dim,1,False)
-    getModelSize(model)
-    model=Attention(dim*8,8,False)
-    getModelSize(model)
-    model=TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias')
-    getModelSize(model)
-    model=TransformerBlock(dim=dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias')
-    getModelSize(model)
-    model=DecoupleConv(dim, dim, wave_vector_threshold=2)
-    getModelSize(model)
-    model=DecoupleConv(dim*4, dim*4, wave_vector_threshold=4)
-    getModelSize(model)
-    model=DecoupleConv(dim*8, dim*8, wave_vector_threshold=4)
-    getModelSize(model)
-    model=Error_Predictor()
-    getModelSize(model)
-    model=Compensator_predicter()
-    getModelSize(model)
-    model=UpRes()
-    getModelSize(model)
-    model=ConvModule()
-    getModelSize(model)
-    model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
-    getModelSize(model)
+    # dim=32
+    # model=Attention(dim,1,False)
+    # getModelSize(model)
+    # model=Attention(dim*8,8,False)
+    # getModelSize(model)
+    # model=TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
+    #                          LayerNorm_type='WithBias')
+    # getModelSize(model)
+    # model=TransformerBlock(dim=dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
+    #                          LayerNorm_type='WithBias')
+    # getModelSize(model)
+    # model=DecoupleConv(dim, dim, wave_vector_threshold=2)
+    # getModelSize(model)
+    # model=DecoupleConv(dim*4, dim*4, wave_vector_threshold=4)
+    # getModelSize(model)
+    # model=DecoupleConv(dim*8, dim*8, wave_vector_threshold=4)
+    # getModelSize(model)
+    # model=Error_Predictor()
+    # getModelSize(model)
+    # model=Compensator_predicter()
+    # getModelSize(model)
+    # model=UpRes()
+    # getModelSize(model)
+    # model=ConvModule()
+    # getModelSize(model)
+    # model=Dehazer(kernel_size=15, top_candidates_ratio=0.0001,omega=0.95,radius=40,eps=1e-3,open_threshold=True,depth_est=True)
+    # getModelSize(model)
 
 # model=ECE()
 # model.to('cuda')
