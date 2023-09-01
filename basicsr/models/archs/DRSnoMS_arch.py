@@ -374,7 +374,7 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class DRSformer(nn.Module):
+class DRSnoMS(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -386,7 +386,7 @@ class DRSformer(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSformer, self).__init__()
+        super(DRSnoMS, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -470,8 +470,9 @@ class DRSformer(nn.Module):
 
 if __name__ == '__main__':
     input = torch.rand(1, 3, 256, 256)
-    model = DRSformer()
-   # output = model(input)
+    model = DRSnoMS()
+    output = model(input)
+    print(output.shape)
 
     # from fvcore.nn import FlopCountAnalysis, parameter_count_table
 
