@@ -66,18 +66,20 @@ class DeCoupleConvv3(nn.Module):
         self.dim = dim
         hidden_features = int(dim * ffn_expansion_factor)
         self.hidden_features = hidden_features
-        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate',groups=4*hidden_features, bias=bias)
+        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', groups=4*hidden_features, bias=bias)
         self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
         self.avgconv.weight.requires_grad = False
         self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
         self.mainconv = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
         self.mainrelu = nn.ReLU()
-        self.l_pointconv = nn.Conv2d(4*hidden_features, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.h_pointconv = nn.Conv2d(4*hidden_features, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.l_depthconv = nn.Conv2d(2*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.h_depthconv = nn.Conv2d(2*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.lrelu = nn.ReLU()
-        self.hrelu = nn.ReLU()
+        self.l_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
+        self.h_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
+        self.l_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.h_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.lrelu1 = nn.ReLU()
+        self.lrelu2 = nn.ReLU()
+        self.hrelu1 = nn.ReLU()
+        self.hrelu2 = nn.ReLU()
         self.outconv = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
     
     def forward(self, x):
@@ -86,12 +88,14 @@ class DeCoupleConvv3(nn.Module):
         x = self.mainrelu(x)        # 4*hidden_features -> 4*hidden_features
         l = self.avgconv(x)         # 4*hidden_features -> 4*hidden_features
         h = x - l                   # 4*hidden_features -> 4*hidden_features
-        l_tol, l_toh = torch.split(self.l_pointconv(l), self.hidden_features, dim=1)    # 4*hidden_features -> 2*hidden_features
-        h_toh, h_tol = torch.split(self.h_pointconv(h), self.hidden_features, dim=1)    # 4*hidden_features -> 2*hidden_features
-        l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 2*hidden_features -> hidden_features
-        h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 2*hidden_features -> hidden_features
-        l = self.lrelu(l)           # hidden_features -> hidden_features
-        h = self.hrelu(h)           # hidden_features -> hidden_features
+        l = self.l_pointconv(l)     # 4*hidden_features -> 4*hidden_features
+        h = self.h_pointconv(h)     # 4*hidden_features -> 4*hidden_features
+        l_tol, l_toh = torch.split(self.lrelu1(l),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
+        h_toh, h_tol = torch.split(self.hrelu1(h),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
+        l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 4*hidden_features -> hidden_features
+        h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 4*hidden_features -> hidden_features
+        l = self.lrelu2(l)           # hidden_features -> hidden_features
+        h = self.hrelu2(h)           # hidden_features -> hidden_features
         x = torch.cat([l, h], dim=1)    # 2*hidden_features -> 2*hidden_features
         x = self.outconv(x)         # 2*hidden_features -> dim
         return x
@@ -483,8 +487,9 @@ class DRSDCv3(nn.Module):
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
-    model = DRSDCv3()
-    
+    model = DRSDCv3(dim = 64)
+    model.to('cuda')
+
     # output_tensor = model(input_tensor)
     # print(output_tensor.shape)
     def getModelSize(model):
@@ -503,7 +508,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     getModelSize(model)
-    dim=32
+    dim=54
     model=Attention(dim,1,False)
     getModelSize(model)
     model=Attention(dim*8,8,False)
@@ -519,6 +524,6 @@ if __name__=="__main__":
     model=DeCoupleConvv3(dim*4)
     getModelSize(model)
     model=DeCoupleConvv3(dim*8)
-    model.to('cuda')
-    summary(model,(256,128,128))
+    # model.to('cuda')
+    # summary(model,(432,32,32))
     getModelSize(model)
