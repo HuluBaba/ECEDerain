@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 import numbers
+from torchsummary import summary
 
 from einops import rearrange
 
@@ -65,7 +66,7 @@ class DeCoupleConvv3(nn.Module):
         self.dim = dim
         hidden_features = int(dim * ffn_expansion_factor)
         self.hidden_features = hidden_features
-        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', bias=bias)
+        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate',groups=4*hidden_features, bias=bias)
         self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
         self.avgconv.weight.requires_grad = False
         self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
@@ -484,8 +485,8 @@ if __name__=="__main__":
     print(input_tensor.shape)
     model = DRSDCv3()
     
-    output_tensor = model(input_tensor)
-    print(output_tensor.shape)
+    # output_tensor = model(input_tensor)
+    # print(output_tensor.shape)
     def getModelSize(model):
         param_size = 0
         param_sum = 0
@@ -507,10 +508,10 @@ if __name__=="__main__":
     getModelSize(model)
     model=Attention(dim*8,8,False)
     getModelSize(model)
-    model=TransformerBlock(dim=dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
+    model=TransformerBlock(dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias')
     getModelSize(model)
-    model=TransformerBlock(dim=dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
+    model=TransformerBlock(dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias')
     getModelSize(model)
     model=DeCoupleConvv3(dim)
@@ -518,4 +519,6 @@ if __name__=="__main__":
     model=DeCoupleConvv3(dim*4)
     getModelSize(model)
     model=DeCoupleConvv3(dim*8)
+    model.to('cuda')
+    summary(model,(256,128,128))
     getModelSize(model)
