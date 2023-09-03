@@ -394,7 +394,7 @@ class DRSDCv3(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
-                 dim=48,
+                 dim=64,
                  num_blocks=[4, 6, 6, 8],
                  heads=[1, 2, 4, 8],
                  ffn_expansion_factor=2.66,
