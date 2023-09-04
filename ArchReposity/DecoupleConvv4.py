@@ -63,6 +63,7 @@ class ShuffleV2Block(nn.Module):
         x = x.reshape(2, -1, num_channels // 2, height, width)
         return x[0], x[1]
 
+
 class ShuffleV1Block(nn.Module):
     def __init__(self, inp, oup, *, group, first_group, mid_channels, ksize, stride):
         super(ShuffleV1Block, self).__init__()
@@ -128,38 +129,55 @@ class ShuffleV1Block(nn.Module):
 class DeCoupleConvv4(nn.Module):
     def __init__(self, dim, ffn_expansion_factor = 2.66, bias=False):
         super(DeCoupleConvv4, self).__init__()
-        self.dim = dim
-        hidden_features = int(dim * ffn_expansion_factor)
+        hidden_features = int(dim*ffn_expansion_factor)
         self.hidden_features = hidden_features
+        self.inPconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
+        self.inDconv = nn.Conv2d(2*hidden_features,4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
+        self.inrelu = nn.ReLU()
         self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', bias=bias)
         self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
         self.avgconv.weight.requires_grad = False
-        self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.mainconv = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
-        self.mainrelu = nn.ReLU()
-        self.l_pointconv = nn.Conv2d(4*hidden_features, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.h_pointconv = nn.Conv2d(4*hidden_features, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.l_depthconv = nn.Conv2d(2*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.h_depthconv = nn.Conv2d(2*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.lrelu = nn.ReLU()
-        self.hrelu = nn.ReLU()
+        self.l_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.h_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.lrelu1 = nn.ReLU()
+        self.hrelu1 = nn.ReLU()
+        self.l_pointconv2 = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.h_pointconv2 = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.l_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.h_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.lrelu2 = nn.ReLU()
+        self.hrelu2 = nn.ReLU()
         self.outconv = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
-    
-    def forward(self, x):
-        x = self.inconv(x)          # dim -> 2*hidden_features
-        x = self.mainconv(x)        # 2*hidden_features -> 4*hidden_features
-        x = self.mainrelu(x)        # 4*hidden_features -> 4*hidden_features
-        l = self.avgconv(x)         # 4*hidden_features -> 4*hidden_features
-        h = x - l                   # 4*hidden_features -> 4*hidden_features
-        l_tol, l_toh = torch.split(self.l_pointconv(l), self.hidden_features, dim=1)    # 4*hidden_features -> 2*hidden_features
-        h_toh, h_tol = torch.split(self.h_pointconv(h), self.hidden_features, dim=1)    # 4*hidden_features -> 2*hidden_features
-        l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 2*hidden_features -> hidden_features
-        h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 2*hidden_features -> hidden_features
-        l = self.lrelu(l)           # hidden_features -> hidden_features
-        h = self.hrelu(h)           # hidden_features -> hidden_features
-        x = torch.cat([l, h], dim=1)    # 2*hidden_features -> 2*hidden_features
-        x = self.outconv(x)         # 2*hidden_features -> dim
+
+    def forward(self, old_x):
+        residual = old_x
+        x = self.inPconv(old_x)
+        x = self.inDconv(x)
+        x = self.inrelu(x)
+        l = self.avgconv(x)
+        h = x - l
+        l = self.l_pointconv(l)
+        h = self.h_pointconv(h)
+        l = self.lrelu1(l)
+        h = self.hrelu1(h)
+        l = self.shuffle(l)
+        h = self.shuffle(h)
+        l_tol, l_toh = torch.split(self.l_pointconv2(l), 2*self.hidden_features, dim=1)
+        h_toh, h_tol = torch.split(self.h_pointconv2(h), 2*self.hidden_features, dim=1)
+        l = self.l_depthconv(torch.cat((l_tol, h_tol), dim=1))
+        h = self.h_depthconv(torch.cat((h_toh, l_toh), dim=1))
+        l = self.lrelu2(l)
+        h = self.hrelu2(h)
+        out = self.outconv(torch.cat((l, h), dim=1))
+        return out + residual
+
+    def shuffle(self, x):
+        batchsize, num_channels, height, width = x.data.size()
+        group_channels = num_channels // 4
+        x = x.reshape(batchsize, group_channels, 4, height*width).permute(0, 2, 1, 3).reshape(batchsize, num_channels, height, width)
         return x
+
+
 
 if __name__ == "__main__":
     # x = torch.randn(1, 32, 32, 32)
@@ -182,7 +200,18 @@ if __name__ == "__main__":
     #     return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     # getModelSize(model)
-    pass
+    x = torch.tensor([[11,12,13,14,15,16],[21,22,23,24,25,26],[31,32,33,34,35,36]])
+    x = x.unsqueeze(-1).unsqueeze(-1)
+    batchsize, num_channels, height, width = x.data.size()
+    assert num_channels % 3 == 0
+    group_channels = num_channels // 3
+    
+    x = x.reshape(batchsize, group_channels, 3, height*width)
+    print(x)
+    x = x.permute(0, 2, 1, 3)
+    print(x)
+    x = x.reshape(batchsize, num_channels, height, width)
+    print(x)
 
 
         
