@@ -180,38 +180,19 @@ class DeCoupleConvv4(nn.Module):
 
 
 if __name__ == "__main__":
-    # x = torch.randn(1, 32, 32, 32)
-    # model = ShuffleV2Block(16,32,mid_channels=96,ksize=3,stride=1)
-    # y = model(x)
-    # print(y.shape)
-    # def getModelSize(model):
-    #     param_size = 0
-    #     param_sum = 0
-    #     for param in model.parameters():
-    #         param_size += param.nelement() * param.element_size()
-    #         param_sum += param.nelement()
-    #     buffer_size = 0
-    #     buffer_sum = 0
-    #     for buffer in model.buffers():
-    #         buffer_size += buffer.nelement() * buffer.element_size()
-    #         buffer_sum += buffer.nelement()
-    #     all_size = (param_size + buffer_size) / 1024 / 1024
-    #     print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
-    #     return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
-    # getModelSize(model)
-    x = torch.tensor([[11,12,13,14,15,16],[21,22,23,24,25,26],[31,32,33,34,35,36]])
-    x = x.unsqueeze(-1).unsqueeze(-1)
-    batchsize, num_channels, height, width = x.data.size()
-    assert num_channels % 3 == 0
-    group_channels = num_channels // 3
-    
-    x = x.reshape(batchsize, group_channels, 3, height*width)
-    print(x)
-    x = x.permute(0, 2, 1, 3)
-    print(x)
-    x = x.reshape(batchsize, num_channels, height, width)
-    print(x)
+    def getModelSize(model):
+        param_size = 0
+        param_sum = 0
+        for param in model.parameters():
+            param_size += param.nelement() * param.element_size()
+            param_sum += param.nelement()
+        buffer_size = 0
+        buffer_sum = 0
+        for buffer in model.buffers():
+            buffer_size += buffer.nelement() * buffer.element_size()
+            buffer_sum += buffer.nelement()
+        all_size = (param_size + buffer_size) / 1024 / 1024
+        print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
+        return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
-
-        

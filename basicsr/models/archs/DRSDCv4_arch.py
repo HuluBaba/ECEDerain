@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 import numbers
+from torchsummary import summary
 
 from einops import rearrange
 
@@ -59,43 +60,58 @@ class LayerNorm(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 ##  Mixed-Scale Feed-forward Network (MSFN)
-class FeedForward(nn.Module):
-    def __init__(self, dim, ffn_expansion_factor, bias):
-        super(FeedForward, self).__init__()
+class DeCoupleConvv4(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor = 2.66, bias=False):
+        super(DeCoupleConvv4, self).__init__()
+        hidden_features = int(dim*ffn_expansion_factor)
+        self.hidden_features = hidden_features
+        self.inPconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
+        self.inDconv = nn.Conv2d(2*hidden_features,4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
+        self.inrelu = nn.ReLU()
+        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', groups=4*hidden_features, bias=bias)
+        self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
+        self.avgconv.weight.requires_grad = False
+        self.l_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.h_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.lrelu1 = nn.ReLU()
+        self.hrelu1 = nn.ReLU()
+        self.l_pointconv2 = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.h_pointconv2 = nn.Conv2d(4*hidden_features, 4*hidden_features, 1, 1, 0, groups=hidden_features, bias=bias)
+        self.l_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.h_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.lrelu2 = nn.ReLU()
+        self.hrelu2 = nn.ReLU()
+        self.outconv = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
 
-        hidden_features = int(dim * ffn_expansion_factor)
+    def forward(self, old_x):
+        residual = old_x
+        x = self.inPconv(old_x)
+        x = self.inDconv(x)
+        x = self.inrelu(x)
+        l = self.avgconv(x)
+        h = x - l
+        l = self.l_pointconv(l)
+        h = self.h_pointconv(h)
+        l = self.lrelu1(l)
+        h = self.hrelu1(h)
+        l = self.shuffle(l)
+        h = self.shuffle(h)
+        l_tol, l_toh = torch.split(self.l_pointconv2(l), 2*self.hidden_features, dim=1)
+        h_toh, h_tol = torch.split(self.h_pointconv2(h), 2*self.hidden_features, dim=1)
+        l = self.l_depthconv(torch.cat((l_tol, h_tol), dim=1))
+        h = self.h_depthconv(torch.cat((h_toh, l_toh), dim=1))
+        l = self.lrelu2(l)
+        h = self.hrelu2(h)
+        out = self.outconv(torch.cat((l, h), dim=1))
+        return out + residual
 
-        self.project_in = nn.Conv2d(dim, hidden_features * 2, kernel_size=1, bias=bias)
-
-        self.dwconv3x3 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1, groups=hidden_features * 2, bias=bias)
-        self.dwconv5x5 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=5, stride=1, padding=2, groups=hidden_features * 2, bias=bias)
-        self.relu3 = nn.ReLU()
-        self.relu5 = nn.ReLU()
-
-        self.dwconv3x3_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=3, stride=1, padding=1, groups=hidden_features , bias=bias)
-        self.dwconv5x5_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=5, stride=1, padding=2, groups=hidden_features , bias=bias)
-
-        self.relu3_1 = nn.ReLU()
-        self.relu5_1 = nn.ReLU()
-
-        self.project_out = nn.Conv2d(hidden_features * 2, dim, kernel_size=1, bias=bias)
-
-    def forward(self, x):
-        x = self.project_in(x)
-        x1_3, x2_3 = self.relu3(self.dwconv3x3(x)).chunk(2, dim=1)
-        x1_5, x2_5 = self.relu5(self.dwconv5x5(x)).chunk(2, dim=1)
-
-        x1 = torch.cat([x1_3, x1_5], dim=1)
-        x2 = torch.cat([x2_3, x2_5], dim=1)
-
-        x1 = self.relu3_1(self.dwconv3x3_1(x1))
-        x2 = self.relu5_1(self.dwconv5x5_1(x2))
-
-        x = torch.cat([x1, x2], dim=1)
-
-        x = self.project_out(x)
-
+    def shuffle(self, x):
+        batchsize, num_channels, height, width = x.data.size()
+        group_channels = num_channels // 4
+        x = x.reshape(batchsize, group_channels, 4, height*width).permute(0, 2, 1, 3).reshape(batchsize, num_channels, height, width)
         return x
+
+
 
 ##  Top-K Sparse Attention (TKSA)
 class Attention(nn.Module):
@@ -178,7 +194,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = Attention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
+        self.ffn = DeCoupleConvv4(dim, ffn_expansion_factor, bias)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
@@ -385,7 +401,7 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class DRSformer(nn.Module):
+class DRSDCv4(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -397,7 +413,7 @@ class DRSformer(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSformer, self).__init__()
+        super(DRSDCv4, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -497,9 +513,8 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     dim = 48
-    model = DRSformer(dim = dim)
+    model = DRSDCv4(dim = dim)
     model.to('cuda')
-    from torchsummary import summary
     summary(model,(3,64,64),batch_size=1)
     getModelSize(model)
 
@@ -518,9 +533,9 @@ if __name__=="__main__":
     model=TransformerBlock(dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
                              LayerNorm_type='WithBias')
     getModelSize(model)
-    model=FeedForward(dim,ffn_expansion_factor=2.66,bias=False)
+    model=DeCoupleConvv4(dim)
     getModelSize(model)
-    model=FeedForward(dim*4,ffn_expansion_factor=2.66,bias=False)
+    model=DeCoupleConvv4(dim*4)
     getModelSize(model)
-    model=FeedForward(dim*8,ffn_expansion_factor=2.66,bias=False)
+    model=DeCoupleConvv4(dim*8)
     getModelSize(model)
