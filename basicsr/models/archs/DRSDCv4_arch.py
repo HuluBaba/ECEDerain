@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 import numbers
-from torchsummary import summary
 
 from einops import rearrange
 
@@ -515,7 +514,7 @@ if __name__=="__main__":
     dim = 48
     model = DRSDCv4(dim = dim)
     model.to('cuda')
-    summary(model,(3,64,64),batch_size=1)
+    # summary(model,(3,64,64),batch_size=1)
     getModelSize(model)
 
     # input_tensor = torch.rand((4,3,256,256))
