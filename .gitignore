@@ -13,6 +13,7 @@ tb_logger/
 *.pth
 *.state
 basicsr/version.py
+basicsr/measure.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
