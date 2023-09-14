@@ -61,6 +61,61 @@ class LayerNorm(nn.Module):
         h, w = x.shape[-2:]
         return to_4d(self.body(to_3d(x)), h, w)
 
+
+
+
+class NormalAttention(nn.Module):
+    def __init__(self, dim, num_heads, bias):
+        super(NormalAttention, self).__init__()
+        self.num_heads = num_heads
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+
+        self.qkv = nn.Conv2d(dim, dim*3, kernel_size=1, bias=bias)
+        self.qkv_dwconv = nn.Conv2d(dim*3, dim*3, kernel_size=3, stride=1, padding=1, groups=dim*3, bias=bias)
+        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        
+    def forward(self, x):
+        b,c,h,w = x.shape
+
+        qkv = self.qkv_dwconv(self.qkv(x))
+        q,k,v = qkv.chunk(3, dim=1)   
+        
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        attn = (q @ k.transpose(-2, -1)) * self.temperature
+        attn = attn.softmax(dim=-1)
+
+        out = (attn @ v)
+        
+        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+
+        out = self.project_out(out)
+        return out
+
+class InTrans(nn.Module):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
+        super(InTrans, self).__init__()
+
+        self.norm1 = LayerNorm(dim, LayerNorm_type)
+        self.attn = NormalAttention(dim, num_heads, bias)
+        self.norm2 = LayerNorm(dim, LayerNorm_type)
+        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
+
+        return x
+
+
+
+
+
 ##  Top-K Sparse Attention (TKSA)
 class Attention(nn.Module):
     def __init__(self, dim, num_heads, bias):
@@ -363,7 +418,7 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 ## Main Model
-class DRSformer(nn.Module):
+class DRSinwoS(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -375,11 +430,13 @@ class DRSformer(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSformer, self).__init__()
+        super(DRSinwoS, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
-        self.encoder_level0 = subnet(dim)  ## We do not use MEFC for training Rain200L and SPA-Data
+        self.encoder_level0 = nn.Sequential(*[
+            InTrans(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
+                             LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])  ## We do not use MEFC for training Rain200L and SPA-Data
 
         self.encoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
@@ -472,4 +529,8 @@ if __name__ =='__main__':
         all_size = (param_size + buffer_size) / 1024 / 1024
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
-    getModelSize(DRSformer)
+    model = DRSinwoS()
+    getModelSize(model)
+    input_tensor = torch.rand(1,3,128,128)
+    output_tensor = model(input_tensor)
+    print(output_tensor.shape)
