@@ -62,8 +62,6 @@ class LayerNorm(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 
-
-
 class NormalAttention(nn.Module):
     def __init__(self, dim, num_heads, bias):
         super(NormalAttention, self).__init__()
@@ -533,4 +531,8 @@ if __name__ =='__main__':
     getModelSize(model)
     input_tensor = torch.rand(1,3,128,128)
     output_tensor = model(input_tensor)
+    # loss_fun = nn.L1Loss()
+    # loss = loss_fun(output_tensor,torch.zeros_like(output_tensor))
+    # loss.backward()
+    # print(loss.shape)
     print(output_tensor.shape)
