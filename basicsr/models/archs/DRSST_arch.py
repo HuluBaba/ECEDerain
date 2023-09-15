@@ -70,7 +70,7 @@ class STSAttnGen(nn.Module):
         self.in_ch = in_ch
         self.gap = nn.AdaptiveAvgPool2d((1,1))
         self.ffn = nn.Sequential(nn.Linear(in_ch,in_ch),
-                                 nn.BatchNorm1d(in_ch),
+                                #  nn.BatchNorm1d(in_ch),
                                  nn.ReLU(),
                                  nn.Linear(in_ch, in_ch),
                                  nn.Sigmoid(),
@@ -110,7 +110,7 @@ class STSAttention(nn.Module):
         self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
         self.attn_drop = nn.Dropout(0.)
 
-        self.thresholdweight = nn.Parameter(0.2*torch.ones(4, 1, 1))
+        self.thresholdweight = nn.Parameter(0.2*torch.ones(4, 1, 1, 1))
 
     def forward(self, x):
         b, c, h, w = x.shape
@@ -378,7 +378,7 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 ## Main Model
-class DRSinwoS(nn.Module):
+class DRSST(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -390,7 +390,7 @@ class DRSinwoS(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSinwoS, self).__init__()
+        super(DRSST, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -487,9 +487,9 @@ if __name__ =='__main__':
         all_size = (param_size + buffer_size) / 1024 / 1024
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
-    model = DRSinwoS()
+    model = DRSST()
     getModelSize(model)
-    input_tensor = torch.rand(1,3,128,128)
+    input_tensor = torch.rand(2,3,128,128)
     output_tensor = model(input_tensor)
     # loss_fun = nn.L1Loss()
     # loss = loss_fun(output_tensor,torch.zeros_like(output_tensor))
