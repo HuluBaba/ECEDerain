@@ -57,23 +57,142 @@ class LayerNorm(nn.Module):
         h, w = x.shape[-2:]
         return to_4d(self.body(to_3d(x)), h, w)
 
-##  Top-K Sparse Attention (TKSA)
-class Attention(nn.Module):
+## Normal Attention and Multiscale Feedforward
+
+class NormalAttention(nn.Module):
     def __init__(self, dim, num_heads, bias):
-        super(Attention, self).__init__()
+        super(NormalAttention, self).__init__()
+        self.num_heads = num_heads
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+
+        self.qkv = nn.Conv2d(dim, dim*3, kernel_size=1, bias=bias)
+        self.qkv_dwconv = nn.Conv2d(dim*3, dim*3, kernel_size=3, stride=1, padding=1, groups=dim*3, bias=bias)
+        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+        
+    def forward(self, x):
+        b,c,h,w = x.shape
+
+        qkv = self.qkv_dwconv(self.qkv(x))
+        q,k,v = qkv.chunk(3, dim=1)   
+        
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        attn = (q @ k.transpose(-2, -1)) * self.temperature
+        attn = attn.softmax(dim=-1)
+
+        out = (attn @ v)
+        
+        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+
+        out = self.project_out(out)
+        return out
+
+class InTrans(nn.Module):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
+        super(InTrans, self).__init__()
+
+        self.norm1 = LayerNorm(dim, LayerNorm_type)
+        self.attn = NormalAttention(dim, num_heads, bias)
+        self.norm2 = LayerNorm(dim, LayerNorm_type)
+        self.ffn = MultiScaleFeedForward(dim, ffn_expansion_factor, bias)
+
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
+
+        return x
+
+class MultiScaleFeedForward(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor, bias):
+        super(MultiScaleFeedForward, self).__init__()
+
+        hidden_features = int(dim * ffn_expansion_factor)
+
+        self.project_in = nn.Conv2d(dim, hidden_features * 2, kernel_size=1, bias=bias)
+
+        self.dwconv3x3 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1, groups=hidden_features * 2, bias=bias)
+        self.dwconv5x5 = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=5, stride=1, padding=2, groups=hidden_features * 2, bias=bias)
+        self.relu3 = nn.ReLU()
+        self.relu5 = nn.ReLU()
+
+        self.dwconv3x3_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=3, stride=1, padding=1, groups=hidden_features , bias=bias)
+        self.dwconv5x5_1 = nn.Conv2d(hidden_features * 2, hidden_features, kernel_size=5, stride=1, padding=2, groups=hidden_features , bias=bias)
+
+        self.relu3_1 = nn.ReLU()
+        self.relu5_1 = nn.ReLU()
+
+        self.project_out = nn.Conv2d(hidden_features * 2, dim, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        x = self.project_in(x)
+        x1_3, x2_3 = self.relu3(self.dwconv3x3(x)).chunk(2, dim=1)
+        x1_5, x2_5 = self.relu5(self.dwconv5x5(x)).chunk(2, dim=1)
+
+        x1 = torch.cat([x1_3, x1_5], dim=1)
+        x2 = torch.cat([x2_3, x2_5], dim=1)
+
+        x1 = self.relu3_1(self.dwconv3x3_1(x1))
+        x2 = self.relu5_1(self.dwconv5x5_1(x2))
+
+        x = torch.cat([x1, x2], dim=1)
+
+        x = self.project_out(x)
+
+        return x
+
+## STST : Soft Threshold Sparse Transformer | ST Attention and DecoupleConvv3
+class STSAttnGen(nn.Module):
+    def __init__(self, in_ch):
+        super(STSAttnGen, self).__init__()
+        self.in_ch = in_ch
+        self.gap = nn.AdaptiveAvgPool2d((1,1))
+        self.ffn = nn.Sequential(nn.Linear(in_ch,in_ch),
+                                #  nn.BatchNorm1d(in_ch),
+                                 nn.ReLU(),
+                                 nn.Linear(in_ch, in_ch),
+                                 nn.Sigmoid(),
+                                 )
+
+    def forward(self, x):
+        x_raw = x
+        x = torch.abs(x)
+        x_abs = x
+        x = self.gap(x)
+        x = torch.flatten(x, 1)
+        average = x
+        x = self.ffn(x)
+        x = torch.mul(average, x)
+        x = x.unsqueeze(2).unsqueeze(2)
+        # soft thresholding
+        sub = x_abs - x
+        zeros = torch.zeros_like(sub)
+        n_sub = torch.max(sub, zeros)
+        x = torch.mul(torch.sign(x_raw), n_sub)
+        return x
+
+class STSAttention(nn.Module):
+    def __init__(self, dim, num_heads, bias):
+        super(STSAttention, self).__init__()
         self.num_heads = num_heads
 
         self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+
+        self.attn1 = STSAttnGen(num_heads)
+        self.attn2 = STSAttnGen(num_heads)
+        self.attn3 = STSAttnGen(num_heads)
+        self.attn4 = STSAttnGen(num_heads)
 
         self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=bias)
         self.qkv_dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, stride=1, padding=1, groups=dim * 3, bias=bias)
         self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
         self.attn_drop = nn.Dropout(0.)
 
-        self.attn1 = torch.nn.Parameter(torch.tensor([0.2]), requires_grad=True)
-        self.attn2 = torch.nn.Parameter(torch.tensor([0.2]), requires_grad=True)
-        self.attn3 = torch.nn.Parameter(torch.tensor([0.2]), requires_grad=True)
-        self.attn4 = torch.nn.Parameter(torch.tensor([0.2]), requires_grad=True)
+        self.thresholdweight = nn.Parameter(0.2*torch.ones(4, 1, 1, 1))
 
     def forward(self, x):
         b, c, h, w = x.shape
@@ -90,53 +209,74 @@ class Attention(nn.Module):
 
         _, _, C, _ = q.shape
 
-        mask1 = torch.zeros(b, self.num_heads, C, C, device=x.device, requires_grad=False)
-        mask2 = torch.zeros(b, self.num_heads, C, C, device=x.device, requires_grad=False)
-        mask3 = torch.zeros(b, self.num_heads, C, C, device=x.device, requires_grad=False)
-        mask4 = torch.zeros(b, self.num_heads, C, C, device=x.device, requires_grad=False)
 
         attn = (q @ k.transpose(-2, -1)) * self.temperature
 
-        index = torch.topk(attn, k=int(C/2), dim=-1, largest=True)[1]
-        mask1.scatter_(-1, index, 1.)
-        attn1 = torch.where(mask1 > 0, attn, torch.full_like(attn, float('-inf')))
-
-        index = torch.topk(attn, k=int(C*2/3), dim=-1, largest=True)[1]
-        mask2.scatter_(-1, index, 1.)
-        attn2 = torch.where(mask2 > 0, attn, torch.full_like(attn, float('-inf')))
-
-        index = torch.topk(attn, k=int(C*3/4), dim=-1, largest=True)[1]
-        mask3.scatter_(-1, index, 1.)
-        attn3 = torch.where(mask3 > 0, attn, torch.full_like(attn, float('-inf')))
-
-        index = torch.topk(attn, k=int(C*4/5), dim=-1, largest=True)[1]
-        mask4.scatter_(-1, index, 1.)
-        attn4 = torch.where(mask4 > 0, attn, torch.full_like(attn, float('-inf')))
+        attn1 = self.attn1(attn)
+        attn2 = self.attn2(attn)
+        attn3 = self.attn3(attn)
+        attn4 = self.attn4(attn)
 
         attn1 = attn1.softmax(dim=-1)
         attn2 = attn2.softmax(dim=-1)
         attn3 = attn3.softmax(dim=-1)
         attn4 = attn4.softmax(dim=-1)
 
-        out1 = (attn1 @ v)
-        out2 = (attn2 @ v)
-        out3 = (attn3 @ v)
-        out4 = (attn4 @ v)
+        composed_attn = torch.stack([attn1, attn2, attn3, attn4], dim=1)
+        composed_attn = torch.sum(torch.mul(composed_attn, self.thresholdweight),dim=1)
 
-        out = out1 * self.attn1 + out2 * self.attn2 + out3 * self.attn3 + out4 * self.attn4
-
+        out = composed_attn @ v
         out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
 
         out = self.project_out(out)
         return out
 
-##  Sparse Transformer Block (STB) 
+class DeCoupleConvv3(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor = 2.66, bias=False):
+        super(DeCoupleConvv3, self).__init__()
+        self.dim = dim
+        hidden_features = int(dim * ffn_expansion_factor)
+        self.hidden_features = hidden_features
+        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', groups=4*hidden_features, bias=bias)
+        self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
+        self.avgconv.weight.requires_grad = False
+        self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
+        self.mainconv = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
+        self.mainrelu = nn.ReLU()
+        self.l_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
+        self.h_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
+        self.l_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.h_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.lrelu1 = nn.ReLU()
+        self.lrelu2 = nn.ReLU()
+        self.hrelu1 = nn.ReLU()
+        self.hrelu2 = nn.ReLU()
+        self.outconv = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
+    
+    def forward(self, x):
+        x = self.inconv(x)          # dim -> 2*hidden_features
+        x = self.mainconv(x)        # 2*hidden_features -> 4*hidden_features
+        x = self.mainrelu(x)        # 4*hidden_features -> 4*hidden_features
+        l = self.avgconv(x)         # 4*hidden_features -> 4*hidden_features
+        h = x - l                   # 4*hidden_features -> 4*hidden_features
+        l = self.l_pointconv(l)     # 4*hidden_features -> 4*hidden_features
+        h = self.h_pointconv(h)     # 4*hidden_features -> 4*hidden_features
+        l_tol, l_toh = torch.split(self.lrelu1(l),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
+        h_toh, h_tol = torch.split(self.hrelu1(h),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
+        l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 4*hidden_features -> hidden_features
+        h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 4*hidden_features -> hidden_features
+        l = self.lrelu2(l)           # hidden_features -> hidden_features
+        h = self.hrelu2(h)           # hidden_features -> hidden_features
+        x = torch.cat([l, h], dim=1)    # 2*hidden_features -> 2*hidden_features
+        x = self.outconv(x)         # 2*hidden_features -> dim
+        return x
+
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type, aggregate=True):
         super(TransformerBlock, self).__init__()
 
         self.norm1 = LayerNorm(dim, LayerNorm_type)
-        self.attn = Attention(dim, num_heads, bias)
+        self.attn = STSAttention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
         self.ffn = DeCoupleConvv3(dim, dim, dim*3, aggregate=aggregate)
 
@@ -226,25 +366,6 @@ class ResUnit(nn.Module):
         out = self.relu2(out)
         return out        
 
-class UpRes(nn.Module):
-    def __init__(self, out_ch=48):
-        super(UpRes, self).__init__()
-        self.updim1 = nn.Conv2d(3,8,3,1,1)
-        self.resunit1 = ResUnit(8)
-        self.updim2 = nn.Conv2d(8,32,3,1,1)
-        self.resunit2 = ResUnit(32)
-        self.updim3 = nn.Conv2d(32,out_ch,3,1,1)
-        self.resunit3 = ResUnit(out_ch)
-
-    def forward(self, x):
-        x = self.updim1(x)
-        x = self.resunit1(x)
-        x = self.updim2(x)
-        x = self.resunit2(x)
-        x = self.updim3(x)
-        x = self.resunit3(x)
-        return x
-
 class DownRes(nn.Module):
     def __init__(self,in_ch=48*2):
         super(DownRes, self).__init__()
@@ -264,13 +385,25 @@ class DownRes(nn.Module):
         x = self.updim3(x)
         return x
 
+## inConv
+class OverlapPatchEmbed(nn.Module):
+    def __init__(self, in_c=3, embed_dim=48, bias=False):
+        super(OverlapPatchEmbed, self).__init__()
+
+        self.proj = nn.Conv2d(in_c, embed_dim, kernel_size=3, stride=1, padding=1, bias=bias)
+
+    def forward(self, x):
+        x = self.proj(x)
+
+        return x
+
 
 
 
 
 
 ## Main model
-class DRSDCv3(nn.Module):
+class ECE2(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -282,11 +415,13 @@ class DRSDCv3(nn.Module):
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
 
-        super(DRSDCv3, self).__init__()
+        super(ECE2, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
-        self.encoder_level0 = subnet(dim)  ## We do not use MEFC for training Rain200L and SPA-Data
+        self.encoder_level0 = nn.Sequential(*[
+            InTrans(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
+                             LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])  ## We do not use MEFC for training Rain200L and SPA-Data
 
         self.encoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
@@ -369,194 +504,6 @@ class DRSDCv3(nn.Module):
         output = dehaze_output + inp_img
 
         return output
-
-
-## Frequence Decouple Conv
-class DeCoupleConvv3(nn.Module):
-    def __init__(self, dim, ffn_expansion_factor = 2.66, bias=False):
-        super(DeCoupleConvv3, self).__init__()
-        self.dim = dim
-        hidden_features = int(dim * ffn_expansion_factor)
-        self.hidden_features = hidden_features
-        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', groups=4*hidden_features, bias=bias)
-        self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
-        self.avgconv.weight.requires_grad = False
-        self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
-        self.mainconv = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=2*hidden_features, bias=bias)
-        self.mainrelu = nn.ReLU()
-        self.l_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
-        self.h_pointconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 1, groups=4*hidden_features, bias=bias)
-        self.l_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.h_depthconv = nn.Conv2d(4*hidden_features, hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.lrelu1 = nn.ReLU()
-        self.lrelu2 = nn.ReLU()
-        self.hrelu1 = nn.ReLU()
-        self.hrelu2 = nn.ReLU()
-        self.outconv = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
-    
-    def forward(self, x):
-        x = self.inconv(x)          # dim -> 2*hidden_features
-        x = self.mainconv(x)        # 2*hidden_features -> 4*hidden_features
-        x = self.mainrelu(x)        # 4*hidden_features -> 4*hidden_features
-        l = self.avgconv(x)         # 4*hidden_features -> 4*hidden_features
-        h = x - l                   # 4*hidden_features -> 4*hidden_features
-        l = self.l_pointconv(l)     # 4*hidden_features -> 4*hidden_features
-        h = self.h_pointconv(h)     # 4*hidden_features -> 4*hidden_features
-        l_tol, l_toh = torch.split(self.lrelu1(l),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
-        h_toh, h_tol = torch.split(self.hrelu1(h),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
-        l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 4*hidden_features -> hidden_features
-        h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 4*hidden_features -> hidden_features
-        l = self.lrelu2(l)           # hidden_features -> hidden_features
-        h = self.hrelu2(h)           # hidden_features -> hidden_features
-        x = torch.cat([l, h], dim=1)    # 2*hidden_features -> 2*hidden_features
-        x = self.outconv(x)         # 2*hidden_features -> dim
-        return x
-
-
-
-## Original Expert layer
-class subnet(nn.Module):
-    def __init__(self, dim, layer_num=1, steps=4):
-        super(subnet,self).__init__()
-
-        self._C = dim
-        self.num_ops = len(Operations)
-        self._layer_num = layer_num
-        self._steps = steps
-
-        self.layers = nn.ModuleList()
-        for _ in range(self._layer_num):
-            attention = OALayer(self._C, self._steps, self.num_ops)
-            self.layers += [attention]
-            layer = GroupOLs(steps, self._C)
-            self.layers += [layer]
-
-    def forward(self, x):
-    
-        for _, layer in enumerate(self.layers):
-            if isinstance(layer, OALayer):
-                weights = layer(x)
-                weights = F.softmax(weights, dim=-1)
-            else:
-                x = layer(x, weights)
-
-        return x
-
-class OperationLayer(nn.Module):
-    def __init__(self, C, stride):
-        super(OperationLayer, self).__init__()
-        self._ops = nn.ModuleList()
-        for o in Operations:
-            op = OPS[o](C, stride, False)
-            self._ops.append(op)
-
-        self._out = nn.Sequential(nn.Conv2d(C * len(Operations), C, 1, padding=0, bias=False), nn.ReLU())
-
-    def forward(self, x, weights):
-        weights = weights.transpose(1, 0)
-        states = []
-        for w, op in zip(weights, self._ops):
-            states.append(op(x) * w.view([-1, 1, 1, 1]))
-        return self._out(torch.cat(states[:], dim=1))
-
-class GroupOLs(nn.Module):
-    def __init__(self, steps, C):
-        super(GroupOLs, self).__init__()
-        self.preprocess = ReLUConv(C, C, 1, 1, 0, affine=False)
-        self._steps = steps
-        self._ops = nn.ModuleList()
-        self.relu = nn.ReLU()
-        stride = 1
-
-        for _ in range(self._steps):
-            op = OperationLayer(C, stride)
-            self._ops.append(op)
-
-    def forward(self, s0, weights):
-        s0 = self.preprocess(s0)
-        for i in range(self._steps):
-            res = s0
-            s0 = self._ops[i](s0, weights[:, i, :])
-            s0 = self.relu(s0 + res)
-        return s0
-
-class OALayer(nn.Module):
-    def __init__(self, channel, k, num_ops):
-        super(OALayer, self).__init__()
-        self.k = k
-        self.num_ops = num_ops
-        self.output = k * num_ops
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.ca_fc = nn.Sequential(
-            nn.Linear(channel, self.output * 2),
-            nn.ReLU(),
-            nn.Linear(self.output * 2, self.k * self.num_ops))
-
-    def forward(self, x):
-        y = self.avg_pool(x)
-        y = y.view(x.size(0), -1)
-        y = self.ca_fc(y)
-        y = y.view(-1, self.k, self.num_ops)
-        return y
-
-Operations = [
-    'sep_conv_1x1',
-    'sep_conv_3x3',
-    'sep_conv_5x5',
-    'sep_conv_7x7',
-    'dil_conv_3x3',
-    'dil_conv_5x5',
-    'dil_conv_7x7',
-    'avg_pool_3x3'
-]
-
-OPS = {
-    'avg_pool_3x3' : lambda C, stride, affine: nn.AvgPool2d(3, stride=stride, padding=1, count_include_pad=False),
-    'sep_conv_1x1' : lambda C, stride, affine: SepConv(C, C, 1, stride, 0, affine=affine),
-    'sep_conv_3x3' : lambda C, stride, affine: SepConv(C, C, 3, stride, 1, affine=affine),
-    'sep_conv_5x5' : lambda C, stride, affine: SepConv(C, C, 5, stride, 2, affine=affine),
-    'sep_conv_7x7' : lambda C, stride, affine: SepConv(C, C, 7, stride, 3, affine=affine),
-    'dil_conv_3x3' : lambda C, stride, affine: DilConv(C, C, 3, stride, 2, 2, affine=affine),
-    'dil_conv_5x5' : lambda C, stride, affine: DilConv(C, C, 5, stride, 4, 2, affine=affine),
-    'dil_conv_7x7' : lambda C, stride, affine: DilConv(C, C, 7, stride, 6, 2, affine=affine),
-}
-
-class DilConv(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, dilation, affine=True):
-        super(DilConv, self).__init__()
-        self.op = nn.Sequential(
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),)
-
-    def forward(self, x):
-        return self.op(x)
-
-class SepConv(nn.Module):
-    def __init__(self, C_in, C_out, kernel_size, stride, padding, affine=True):
-        super(SepConv, self).__init__()
-        self.op = nn.Sequential(
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=stride, padding=padding, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_in, kernel_size=1, padding=0, bias=False),
-            nn.ReLU(inplace=False),
-            nn.Conv2d(C_in, C_in, kernel_size=kernel_size, stride=1, padding=padding, groups=C_in, bias=False),
-            nn.Conv2d(C_in, C_out, kernel_size=1, padding=0, bias=False),)
-
-    def forward(self, x):
-        return self.op(x)
-
-
-## inConv
-class OverlapPatchEmbed(nn.Module):
-    def __init__(self, in_c=3, embed_dim=48, bias=False):
-        super(OverlapPatchEmbed, self).__init__()
-
-        self.proj = nn.Conv2d(in_c, embed_dim, kernel_size=3, stride=1, padding=1, bias=bias)
-
-    def forward(self, x):
-        x = self.proj(x)
-
-        return x
-
 
 
 
@@ -815,7 +762,7 @@ if __name__ =='__main__':
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     dim=48
-    model = DRSDCv3(dim=48)
+    model = ECE2(dim=48)
     getModelSize(model)
     input_tensor = torch.randn(1, 3, 128, 128)
     print(input_tensor.shape)
