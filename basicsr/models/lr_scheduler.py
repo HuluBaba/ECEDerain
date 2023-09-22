@@ -225,7 +225,7 @@ class CosineAnnealingRestartCyclicLR(_LRScheduler):
         eta_min = self.eta_mins[idx]
 
         return [
-            eta_min + current_weight * 0.5 * (base_lr - eta_min) *
+            eta_min +  0.5 * (current_weight*base_lr - eta_min) *
             (1 + math.cos(math.pi * (
                 (self.last_epoch - nearest_restart) / current_period)))
             for base_lr in self.base_lrs
