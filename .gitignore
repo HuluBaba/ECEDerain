@@ -7,8 +7,12 @@ basicsr.egg-info/
 expriements/
 **/__pycache__/
 Options/
+Options_test/
 !Options/Deraining.yml
+!Options_test/example.yml
 train.sh
+test.sh
+test_DRS.sh
 tb_logger/
 *.pth
 *.state

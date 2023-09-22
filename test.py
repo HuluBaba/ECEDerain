@@ -15,9 +15,10 @@ import numpy as np
 parser = argparse.ArgumentParser(description='Test on your own images')
 parser.add_argument('--input_dir', default='./test/input/', type=str, help='Directory of input images or path of single image')
 parser.add_argument('--result_dir', default='./test/output/', type=str, help='Directory for restored results')
-parser.add_argument('--task', required=True, type=str, help='Task to run', choices=['Deraining'])
 parser.add_argument('--tile', type=int, default=None, help='Tile size (e.g 720). None means testing on the original resolution image')
 parser.add_argument('--tile_overlap', type=int, default=32, help='Overlapping of different tiles')
+parser.add_argument('--model_name', type=str, help='Name of model, such as ECE2, DRSformer')
+parser.add_argument('--pretrained_path', type=str, help='Path to pretrained model weight')
 
 args = parser.parse_args()
 
@@ -33,14 +34,12 @@ def load_gray_img(filepath):
 def save_gray_img(filepath, img):
     cv2.imwrite(filepath, img)
 
-def get_weights_and_parameters(task, parameters):
-    if task == 'Deraining':
-        weights = os.path.join('pretrained_models', 'deraining.pth')
-    return weights, parameters
 
-task    = args.task
+
 inp_dir = args.input_dir
-out_dir = os.path.join(args.result_dir, task)
+out_dir = args.result_dir
+pretrained_path = args.pretrained_path
+model_name = args.model_name
 
 os.makedirs(out_dir, exist_ok=True)
 
@@ -58,22 +57,29 @@ if len(files) == 0:
     raise Exception(f'No files found at {inp_dir}')
 
 # Get model weights and parameters
-parameters = {'inp_channels':3, 'out_channels':3, 'dim':48, 'num_blocks':[4,6,6,8], 'heads':[1,2,4,8], 'ffn_expansion_factor':2.66, 'bias':False, 'LayerNorm_type':'WithBias'}
-weights, parameters = get_weights_and_parameters(task, parameters)
+parameters = {'inp_channels':3,
+                'out_channels':3,
+                'dim':48,
+                'num_blocks':[4,6,6,8],
+                'heads':[1,2,4,8],
+                'ffn_expansion_factor':2.66,
+                'bias':False,
+                'LayerNorm_type':'WithBias'}
 
-load_arch = run_path(os.path.join('basicsr', 'models', 'archs', 'DRSformer_arch.py'))
-model = load_arch['DRSformer'](**parameters)
+
+load_arch = run_path(os.path.join('basicsr', 'models', 'archs', f'{model_name}_arch.py'))
+model = load_arch[model_name](**parameters)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
-checkpoint = torch.load(weights)
+checkpoint = torch.load(pretrained_path)
 model.load_state_dict(checkpoint['params'])
 model.eval()
 
 img_multiple_of = 8
 
-print(f"\n ==> Running {task} with weights {weights}\n ")
+print(f"\n ==> Running with weights {pretrained_path}\n ")
 
 with torch.no_grad():
     for file_ in tqdm(files):
@@ -81,8 +87,7 @@ with torch.no_grad():
             torch.cuda.ipc_collect()
             torch.cuda.empty_cache()
 
-        if task == 'Deraining':
-            img = load_img(file_)
+        img = load_img(file_)
 
         input_ = torch.from_numpy(img).float().div(255.).permute(2,0,1).unsqueeze(0).to(device)
 
@@ -129,7 +134,7 @@ with torch.no_grad():
 
         f = os.path.splitext(os.path.split(file_)[-1])[0]
         # stx()
-        if task == 'Deraining':
-            save_img((os.path.join(out_dir, f+'.png')), restored)
+
+        save_img((os.path.join(out_dir, f+'.png')), restored)
 
     print(f"\nRestored images are saved at {out_dir}")

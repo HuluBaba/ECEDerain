@@ -172,6 +172,31 @@ class ImageCleanModel(BaseModel):
         if self.ema_decay > 0:
             self.model_ema(decay=self.ema_decay)
 
+    def tile_test(self, tile_size, tile_overlap):
+        b, c, h, w = self.lq.size()
+        tile_size = min(tile_size, h, w)
+        stride = tile_size - tile_overlap
+        h_idx_list = list(range(0, h-tile_size, stride)) + [h-tile_size]
+        w_idx_list = list(range(0, w-tile_size, stride)) + [w-tile_size]
+        E = torch.zeros(b, c, h, w).type_as(self.lq)
+        W = torch.zeros_like(E)
+        self.net_g.eval()
+        for h_idx in h_idx_list:
+            for w_idx in w_idx_list:
+                in_patch = self.lq[..., h_idx:h_idx+tile_size, w_idx:w_idx+tile_size]
+                with torch.no_grad():
+                    pred_patch = self.net_g(in_patch)
+                if isinstance(pred_patch, list):
+                    pred_patch = pred_patch[-1]
+                patch_mask = torch.ones_like(pred_patch)
+                E[..., h_idx:(h_idx+tile_size), w_idx:(w_idx+tile_size)].add_(pred_patch)
+                W[..., h_idx:(h_idx+tile_size), w_idx:(w_idx+tile_size)].add_(patch_mask)
+        restored = E.div_(W)
+        self.output = restored
+        self.net_g.train()
+
+
+
     def pad_test(self, window_size):        
         scale = self.opt.get('scale', 1)
         mod_pad_h, mod_pad_w = 0, 0
@@ -222,8 +247,12 @@ class ImageCleanModel(BaseModel):
         # pbar = tqdm(total=len(dataloader), unit='image')
 
         window_size = self.opt['val'].get('window_size', 0)
+        tile_size = self.opt['val'].get('tile_size',0)
+        tile_overlap = self.opt['val'].get('tile_overlap',0)
 
-        if window_size:
+        if tile_size:
+            test = partial(self.tile_test, tile_size, tile_overlap)
+        elif window_size:
             test = partial(self.pad_test, window_size)
         else:
             test = self.nonpad_test
