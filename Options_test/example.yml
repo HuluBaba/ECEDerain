@@ -1,0 +1,99 @@
+# general settings
+name:               #1
+model_type: ImageCleanModel
+scale: 1
+num_gpu:            #2
+manual_seed: 100
+find_unused_parameters: true
+
+# dataset and data loader settings
+datasets:
+
+  val:
+    name: ValSet
+    type: Dataset_PairedImage
+    dataroot_gt: /mnt/data/data_for_wxr/Rain100New/rain_data_test_Heavy/norain
+    dataroot_lq: /mnt/data/data_for_wxr/Rain100New/rain_data_test_Heavy/rain
+    io_backend:
+      type: disk
+
+# network structures
+network_g:
+  type:             #3
+  inp_channels: 3
+  out_channels: 3
+  dim: 48
+  num_blocks: [4,6,6,8]
+  heads: [1,2,4,8]
+  ffn_expansion_factor: 2.66
+  bias: False
+  LayerNorm_type: WithBias
+
+# path
+path:
+  pretrain_network_g: /home/wxr/Code/ECEDerain/experiments/pretrained/ECE2p3_32000.pth    #4
+  strict_load_g: true
+  resume_state: ~
+
+# training settings
+train:
+  total_iter: 
+  warmup_iter: -1 # no warm up
+  use_grad_clip: true
+
+  # Split 300k iterations into two cycles.
+  # 1st cycle: fixed 3e-4 LR for 92k iters.
+  # 2nd cycle: cosine annealing (3e-4 to 1e-6) for 208k iters.
+  scheduler:
+    type: CosineAnnealingRestartCyclicLR
+    periods:          [8000,  20000,  20000,  10000,  10000]
+    restart_weights:  [1,      1,    0.75,    0.125,    0.125]
+    eta_mins:         [0.00008,0.00006,0.00001,0.00001,0.000001]
+
+  mixing_augs:
+    mixup: false
+    mixup_beta: 1.2
+    use_identity: true
+
+  optim_g:
+    type: AdamW
+    lr: !!float 8e-5
+    weight_decay: !!float 1e-4
+    betas: [0.9, 0.999]
+
+  # losses
+  pixel_opt:
+    type: L1Loss
+    loss_weight: 1
+    reduction: mean
+
+# validation settings
+val:
+  window_size: 8            #5
+  # tile_size: 128          #6
+  # tile_overlap: 0         #7
+  val_freq: !!float 2e3
+  save_img: false
+  rgb2bgr: true
+  use_image: true
+  max_minibatch: 8
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      type: calculate_psnr
+      crop_border: 0
+      test_y_channel: true  #8
+
+# logging settings
+logger:
+  print_freq: 200
+  save_checkpoint_freq: !!float 8000
+  use_tb_logger: true
+  wandb:
+    project: ~
+    resume_id: ~
+
+# dist training settings
+dist_params:
+  backend: nccl
+  port: 29500
