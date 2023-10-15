@@ -257,7 +257,7 @@ class DRSECv3(nn.Module):
                  ffn_expansion_factor=2.66,
                  bias=False,
                  LayerNorm_type='WithBias',  ## Other option 'BiasFree'
-                 refine_blocks=8
+                 refine_blocks=3
                  ):
 
         super(DRSECv3, self).__init__()
