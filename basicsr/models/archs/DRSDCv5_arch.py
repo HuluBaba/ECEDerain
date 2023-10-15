@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
 import numbers
+import math
 from torchsummary import summary
 
 from einops import rearrange
@@ -61,12 +62,12 @@ class LayerNorm(nn.Module):
 
 ##  Mixed-Scale Feed-forward Network (MSFN)
 class DeCoupleConvv5(nn.Module):
-    def __init__(self, dim, ffn_expansion_factor = 2.66, bias=False):
+    def __init__(self, dim, ffn_expansion_factor = math.pi, bias=False):
         super(DeCoupleConvv5, self).__init__()
         self.dim = dim
         hidden_features = int(dim * ffn_expansion_factor)
         self.hidden_features = hidden_features
-        self.avgconv = nn.Conv2d(2*hidden_features, 2*hidden_features, 3, 1, 'same', padding_mode='replicate', bias=bias)
+        self.avgconv = nn.Conv2d(2*hidden_features, 2*hidden_features, 3, 1, 'same', groups=2*hidden_features ,padding_mode='replicate', bias=bias)
         self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
         self.avgconv.weight.requires_grad = False
         self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
@@ -389,7 +390,7 @@ class DRSDCv5(nn.Module):
                  dim=64,
                  num_blocks=[4, 6, 6, 8],
                  heads=[1, 2, 4, 8],
-                 ffn_expansion_factor=2.66,
+                 ffn_expansion_factor=math.pi,
                  bias=False,
                  LayerNorm_type='WithBias'  ## Other option 'BiasFree'
                  ):
@@ -479,7 +480,7 @@ class DRSDCv5(nn.Module):
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
-    model = DRSDCv5(dim = 64)
+    model = DRSDCv5(dim = 48)
     model.to('cuda')
     summary(model,(3,128,128))
 

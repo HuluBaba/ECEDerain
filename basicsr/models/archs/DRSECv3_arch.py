@@ -246,19 +246,20 @@ class Upsample(nn.Module):
     def forward(self, x):
         return self.body(x)
 
-class DRSECv2(nn.Module):
+class DRSECv3(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
-                 dim=32,
+                 dim=48,
                  num_blocks=[4, 6, 6, 8],
                  heads=[1, 2, 4, 8],
                  ffn_expansion_factor=2.66,
                  bias=False,
-                 LayerNorm_type='WithBias'  ## Other option 'BiasFree'
+                 LayerNorm_type='WithBias',  ## Other option 'BiasFree'
+                 refine_blocks=8
                  ):
 
-        super(DRSECv2, self).__init__()
+        super(DRSECv3, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -300,7 +301,7 @@ class DRSECv2(nn.Module):
 
         self.decoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
+                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0]+refine_blocks)])
 
         self.outconv = DownRes(in_ch = 2*dim)
         self.err_predictor = Error_estimator()
@@ -814,7 +815,7 @@ class OverlapPatchEmbed(nn.Module):
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
-    model = DRSECv2()
+    model = DRSECv3()
     
     output_tensor = model(input_tensor)
     print(output_tensor.shape)

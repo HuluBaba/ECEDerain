@@ -487,8 +487,9 @@ class DRSDCv3(nn.Module):
 if __name__=="__main__":
     input_tensor = torch.rand((4,3,256,256))
     print(input_tensor.shape)
-    model = DRSDCv3(dim = 64)
+    model = DRSDCv3(dim = 48)
     model.to('cuda')
+    summary(model,(3,128,128))
 
     # output_tensor = model(input_tensor)
     # print(output_tensor.shape)
@@ -508,7 +509,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
     getModelSize(model)
-    dim=54
+    dim=48
     model=Attention(dim,1,False)
     getModelSize(model)
     model=Attention(dim*8,8,False)
@@ -524,6 +525,4 @@ if __name__=="__main__":
     model=DeCoupleConvv3(dim*4)
     getModelSize(model)
     model=DeCoupleConvv3(dim*8)
-    # model.to('cuda')
-    # summary(model,(432,32,32))
     getModelSize(model)
