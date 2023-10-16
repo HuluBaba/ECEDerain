@@ -10,7 +10,7 @@ class DeCoupleConvv3(nn.Module):
         self.dim = dim
         hidden_features = int(dim * ffn_expansion_factor)
         self.hidden_features = hidden_features
-        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', bias=bias)
+        self.avgconv = nn.Conv2d(4*hidden_features, 4*hidden_features, 3, 1, 'same', padding_mode='replicate', groups=4*hidden_features, bias=bias)
         self.avgconv.weight.data = torch.ones_like(self.avgconv.weight.data)/9
         self.avgconv.weight.requires_grad = False
         self.inconv = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
@@ -32,14 +32,14 @@ class DeCoupleConvv3(nn.Module):
         x = self.mainrelu(x)        # 4*hidden_features -> 4*hidden_features
         l = self.avgconv(x)         # 4*hidden_features -> 4*hidden_features
         h = x - l                   # 4*hidden_features -> 4*hidden_features
-        l_tol, l_toh = torch.split(self.l_pointconv(l), self.hidden_features, dim=1)    # 4*hidden_features -> 4*hidden_features
-        h_toh, h_tol = torch.split(self.h_pointconv(h), self.hidden_features, dim=1)    # 4*hidden_features -> 4*hidden_features
-        l = self.lrelu1(l_tol + h_toh)  # 4*hidden_features -> 4*hidden_features
-        h = self.hrelu1(h_tol + l_toh)  # 4*hidden_features -> 4*hidden_features
+        l = self.l_pointconv(l)     # 4*hidden_features -> 4*hidden_features
+        h = self.h_pointconv(h)     # 4*hidden_features -> 4*hidden_features
+        l_tol, l_toh = torch.split(self.lrelu1(l),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
+        h_toh, h_tol = torch.split(self.hrelu1(h),2*self.hidden_features,dim=1)          # 4*hidden_features -> 2*hidden_features
         l = self.l_depthconv(torch.cat([l_tol, h_tol], dim=1))                          # 4*hidden_features -> hidden_features
         h = self.h_depthconv(torch.cat([h_toh, l_toh], dim=1))                          # 4*hidden_features -> hidden_features
-        l = self.lrelu(l)           # hidden_features -> hidden_features
-        h = self.hrelu(h)           # hidden_features -> hidden_features
+        l = self.lrelu2(l)           # hidden_features -> hidden_features
+        h = self.hrelu2(h)           # hidden_features -> hidden_features
         x = torch.cat([l, h], dim=1)    # 2*hidden_features -> 2*hidden_features
         x = self.outconv(x)         # 2*hidden_features -> dim
         return x
