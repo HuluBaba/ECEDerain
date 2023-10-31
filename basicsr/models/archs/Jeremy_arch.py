@@ -556,10 +556,9 @@ class ConvModule(nn.Module):
 class Error_estimator(torch.nn.Module):
     def __init__(self, innerch=64):
         super(Error_estimator, self).__init__()
-        self.error_detector = Expert_Extraction(num_layers=3)   #3->64
+        self.error_detector = Expert_Extraction(num_layers=2)   #3->64
         self.convblock2 = nn.Sequential(nn.Conv2d(innerch, innerch, 3, 1, 1), nn.ReLU(), nn.Conv2d(innerch,3,1,1), nn.Sigmoid())    #64->3
         self.summaryblock = ConvModule()                        #6->3
-        self.extractor = Expert_Extraction(num_layers=3)        #3->64
     def forward(self, pred_b, o):
         x = self.summaryblock(torch.cat([o,pred_b],dim=1))      #3
         x = self.error_detector(x)                              #64
@@ -569,7 +568,7 @@ class Error_estimator(torch.nn.Module):
 class Confidence_estimator(torch.nn.Module):
     def __init__(self,innerch=64):
         super(Confidence_estimator, self).__init__()
-        self.extractor = Expert_Extraction(num_layers=3)
+        self.extractor = Expert_Extraction(num_layers=2)
         self.postprocess = nn.Sequential(nn.Conv2d(innerch, innerch, 3, 1, 1), nn.ReLU(), nn.Conv2d(innerch, 3, 3, 1, 1), nn.Sigmoid())
     def forward(self, pred_b):
         x = self.extractor(pred_b)
@@ -596,12 +595,11 @@ class Jeremy(nn.Module):
                  inp_channels=3,
                  out_channels=3,
                  dim=48,
-                 num_blocks=[4, 6, 6, 8],
+                 num_blocks=[4, 6, 6, 11],
                  heads=[1, 2, 4, 8],
                  ffn_expansion_factor=2.66,
                  bias=False,
                  LayerNorm_type='WithBias',  ## Other option 'BiasFree'
-                 error_estimator_tn=3,
                  ):
 
         super(Jeremy, self).__init__()
