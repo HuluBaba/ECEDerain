@@ -513,16 +513,15 @@ if __name__=="__main__":
 
     model = DRSDCv9()
     model.to('cuda')
-    summary(model,(3,128,128))
+    # summary(model,(3,128,128))
     getModelSize(model)
-    
+    # Count the size of each submodule
+    for name, module in model.named_children():
+        print(f"Total size of the {name} :{getModelSize(module)[-1]:.3f} MB")
+
+
     input_tensor = torch.rand((2,3,128,128)).to('cuda')
     print(input_tensor.shape)
     output_tensor = model(input_tensor)
     print(output_tensor.shape)
 
-
-# model=DRSEC()
-# model.to('cuda')
-# from torchsummary import summary
-# summary(model, input_size=(3, 128, 128), batch_size=1)

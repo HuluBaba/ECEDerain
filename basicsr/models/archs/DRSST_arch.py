@@ -473,6 +473,7 @@ class DRSST(nn.Module):
         return out_dec_level1
 
 if __name__ =='__main__':
+
     def getModelSize(model):
         param_size = 0
         param_sum = 0
@@ -487,12 +488,14 @@ if __name__ =='__main__':
         all_size = (param_size + buffer_size) / 1024 / 1024
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
-    model = DRSST()
+
+    dim = 48
+    model = DRSST(dim = dim)
+    model.to('cuda')
+    from torchsummary import summary
+    # summary(model,(3,64,64),batch_size=1)
     getModelSize(model)
-    input_tensor = torch.rand(2,3,128,128)
-    output_tensor = model(input_tensor)
-    # loss_fun = nn.L1Loss()
-    # loss = loss_fun(output_tensor,torch.zeros_like(output_tensor))
-    # loss.backward()
-    # print(loss.shape)
-    print(output_tensor.shape)
+    # Count the size of each submodule
+    for name, module in model.named_children():
+        print(f"Total size of the {name} :{getModelSize(module)[-1]:.3f} MB")
+

@@ -197,13 +197,13 @@ class LPGuideFeedForward(nn.Module):
 
 ##  Transformer Block
 class TransformerBlock(nn.Module):
-    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type, lp_guide=True):
         super(TransformerBlock, self).__init__()
 
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = STSAttention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = LPGuideFeedForward(dim, ffn_expansion_factor, bias)
+        self.ffn = LPGuideFeedForward(dim, ffn_expansion_factor, bias) if lp_guide else FeedForward(dim, ffn_expansion_factor, bias)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
@@ -212,13 +212,13 @@ class TransformerBlock(nn.Module):
         return x
 
 class InTrans(nn.Module):
-    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
+    def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type, lp_guide=False):
         super(InTrans, self).__init__()
 
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = NormalAttention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = LPGuideFeedForward(dim, ffn_expansion_factor, bias)
+        self.ffn = LPGuideFeedForward(dim, ffn_expansion_factor, bias) if lp_guide else FeedForward(dim, ffn_expansion_factor, bias)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
@@ -261,6 +261,28 @@ class NormalAttention(nn.Module):
         out = self.project_out(out)
         return out
 
+##  FeedForward Size 5
+class FeedForward(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor, bias):
+        super(FeedForward, self).__init__()
+
+        hidden_features = int(dim * ffn_expansion_factor)
+        self.project_in = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
+
+        self.dconv1 = nn.Conv2d(2*hidden_features, 4*hidden_features, 5, 1, 2, groups=hidden_features, bias=bias)
+        self.dconv2 = nn.Conv2d(4*hidden_features, 2*hidden_features, 5, 1, 2, groups=hidden_features, bias=bias)
+
+        self.relu1 = nn.ReLU(inplace=True)
+        self.relu2 = nn.ReLU(inplace=True)
+
+        self.project_out = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
+
+    def forward(self, x):
+        x = self.project_in(x)
+        x = self.relu1(self.dconv1(x))
+        x = self.relu2(self.dconv2(x))
+        x = self.project_out(x)
+        return x
 
 ##  Resizing modules
 class Downsample(nn.Module):
@@ -595,11 +617,13 @@ class Jeremy(nn.Module):
                  inp_channels=3,
                  out_channels=3,
                  dim=48,
-                 num_blocks=[4, 6, 6, 11],
+                 num_blocks=[4, 6, 6, 8],
                  heads=[1, 2, 4, 8],
                  ffn_expansion_factor=2.66,
                  bias=False,
                  LayerNorm_type='WithBias',  ## Other option 'BiasFree'
+                 num_intrans=3,
+                 num_ertrans=3,
                  ):
 
         super(Jeremy, self).__init__()
@@ -608,7 +632,7 @@ class Jeremy(nn.Module):
         
         self.encoder_level0 = nn.Sequential(*[
             InTrans(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
-                             LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])  ## No ST for level 0
+                             LayerNorm_type=LayerNorm_type) for i in range(num_intrans)])  ## No ST for level 0
 
         self.encoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=dim, num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor, bias=bias,
@@ -617,35 +641,35 @@ class Jeremy(nn.Module):
         self.down1_2 = Downsample(dim)  ## From Level 1 to Level 2
         self.encoder_level2 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
+                             bias=bias, LayerNorm_type=LayerNorm_type, lp_guide=False) for i in range(num_blocks[1])])
 
         self.down2_3 = Downsample(int(dim * 2 ** 1))  ## From Level 2 to Level 3
         self.encoder_level3 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
+                             bias=bias, LayerNorm_type=LayerNorm_type, lp_guide=False) for i in range(num_blocks[2])])
 
         self.down3_4 = Downsample(int(dim * 2 ** 2))  ## From Level 3 to Level 4
         self.latent = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 3), num_heads=heads[3], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[3])])
+                             bias=bias, LayerNorm_type=LayerNorm_type, lp_guide=False) for i in range(num_blocks[3])])
 
         self.up4_3 = Upsample(int(dim * 2 ** 3))  ## From Level 4 to Level 3
         self.reduce_chan_level3 = nn.Conv2d(int(dim * 2 ** 3), int(dim * 2 ** 2), kernel_size=1, bias=bias)
         self.decoder_level3 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 2), num_heads=heads[2], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[2])])
+                             bias=bias, LayerNorm_type=LayerNorm_type, lp_guide=False) for i in range(num_blocks[2])])
 
         self.up3_2 = Upsample(int(dim * 2 ** 2))  ## From Level 3 to Level 2
         self.reduce_chan_level2 = nn.Conv2d(int(dim * 2 ** 2), int(dim * 2 ** 1), kernel_size=1, bias=bias)
         self.decoder_level2 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[1], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[1])])
+                             bias=bias, LayerNorm_type=LayerNorm_type, lp_guide=False) for i in range(num_blocks[1])])
 
         self.up2_1 = Upsample(int(dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
 
         self.decoder_level1 = nn.Sequential(*[
             TransformerBlock(dim=int(dim * 2 ** 1), num_heads=heads[0], ffn_expansion_factor=ffn_expansion_factor,
-                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0])])
+                             bias=bias, LayerNorm_type=LayerNorm_type) for i in range(num_blocks[0]+num_ertrans)])
 
         self.downconv = DownRes(in_ch = 2*dim)
         self.err_predictor = Error_estimator()
@@ -711,7 +735,9 @@ if __name__=="__main__":
     model.to('cuda')
     summary(model,(3,128,128))
     getModelSize(model)
-    
+    # Count the size of each submodule
+    for name, module in model.named_children():
+        print(f"Total size of the {name} :{getModelSize(module)[-1]:.3f} MB")
     input_tensor = torch.rand((2,3,128,128)).to('cuda')
     print(input_tensor.shape)
     output_tensor = model(input_tensor)

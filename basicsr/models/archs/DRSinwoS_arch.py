@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pdb import set_trace as stx
+from torchsummary import summary
 import numbers
 
 from einops import rearrange
@@ -528,6 +529,8 @@ if __name__ =='__main__':
         print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
     model = DRSinwoS()
+    model.to('cuda')
+    summary(model,(3,64,64),batch_size=1)
     getModelSize(model)
     input_tensor = torch.rand(1,3,128,128)
     output_tensor = model(input_tensor)

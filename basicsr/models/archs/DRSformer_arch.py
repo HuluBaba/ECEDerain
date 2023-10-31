@@ -500,27 +500,30 @@ if __name__=="__main__":
     model = DRSformer(dim = dim)
     model.to('cuda')
     from torchsummary import summary
-    summary(model,(3,64,64),batch_size=1)
+    # summary(model,(3,64,64),batch_size=1)
     getModelSize(model)
+    # Count the size of each submodule
+    for name, module in model.named_children():
+        print(f"Total size of the {name} :{getModelSize(module)[-1]:.3f} MB")
 
     # input_tensor = torch.rand((4,3,256,256))
     # print(input_tensor.shape)
     # output_tensor = model(input_tensor)
     # print(output_tensor.shape)
 
-    model=Attention(dim,1,False)
-    getModelSize(model)
-    model=Attention(dim*8,8,False)
-    getModelSize(model)
-    model=TransformerBlock(dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias')
-    getModelSize(model)
-    model=TransformerBlock(dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
-                             LayerNorm_type='WithBias')
-    getModelSize(model)
-    model=FeedForward(dim,ffn_expansion_factor=2.66,bias=False)
-    getModelSize(model)
-    model=FeedForward(dim*4,ffn_expansion_factor=2.66,bias=False)
-    getModelSize(model)
-    model=FeedForward(dim*8,ffn_expansion_factor=2.66,bias=False)
-    getModelSize(model)
+    # model=Attention(dim,1,False)
+    # getModelSize(model)
+    # model=Attention(dim*8,8,False)
+    # getModelSize(model)
+    # model=TransformerBlock(dim, num_heads=1, ffn_expansion_factor=2.66, bias=False,
+    #                          LayerNorm_type='WithBias')
+    # getModelSize(model)
+    # model=TransformerBlock(dim*8, num_heads=8, ffn_expansion_factor=2.66, bias=False,
+    #                          LayerNorm_type='WithBias')
+    # getModelSize(model)
+    # model=FeedForward(dim,ffn_expansion_factor=2.66,bias=False)
+    # getModelSize(model)
+    # model=FeedForward(dim*4,ffn_expansion_factor=2.66,bias=False)
+    # getModelSize(model)
+    # model=FeedForward(dim*8,ffn_expansion_factor=2.66,bias=False)
+    # getModelSize(model)
