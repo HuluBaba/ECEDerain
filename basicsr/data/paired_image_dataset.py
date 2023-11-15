@@ -4,7 +4,8 @@ from torchvision.transforms.functional import normalize
 from basicsr.data.data_util import (paired_paths_from_folder,
                                     paired_DP_paths_from_folder,
                                     paired_paths_from_lmdb,
-                                    paired_paths_from_meta_info_file)
+                                    paired_paths_from_meta_info_file,
+                                    nlq_rain1200_from_folder)
 from basicsr.data.transforms import augment, paired_random_crop, paired_random_crop_DP, random_augmentation
 from basicsr.utils import FileClient, imfrombytes, img2tensor, padding, padding_DP, imfrombytesDP
 
@@ -67,6 +68,14 @@ class Dataset_PairedImage(data.Dataset):
             self.paths = paired_paths_from_meta_info_file(
                 [self.lq_folder, self.gt_folder], ['lq', 'gt'],
                 self.opt['meta_info_file'], self.filename_tmpl)
+        elif 'sp_path_func' in self.opt:
+            if self.opt['sp_path_func'] == 'nlq_rain1200_from_folder':
+                self.paths = nlq_rain1200_from_folder(
+                    [self.lq_folder, self.gt_folder], ['lq', 'gt'],
+                    self.filename_tmpl)
+            else:
+                raise Exception("no sp_path_func named {}".format(self.opt['sp_path_func']))
+
         else:
             self.paths = paired_paths_from_folder(
                 [self.lq_folder, self.gt_folder], ['lq', 'gt'],
