@@ -250,7 +250,7 @@ def paired_paths_from_folder(folders, keys, filename_tmpl):
                   (f'{gt_key}_path', gt_path)]))
     return paths
 
-def nlq_rain1200_from_folder(folders, keys, filename_tmpl):
+def nlq_DDN_from_folder(folders, keys, filename_tmpl):
     """Generate paired paths from folders.
 
     Args:
