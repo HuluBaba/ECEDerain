@@ -401,8 +401,8 @@ class Expert_Extraction(torch.nn.Module):
         self.prerelu = nn.ReLU()
         self.experts = torch.nn.ModuleList()
         for i in range(num_layers):
-            self.experts.append(Experts_Layer_B())
-            self.experts.append(Experts_Layer_A())
+            self.experts.append(Experts_Layer_B(innerch=innerch))
+            self.experts.append(Experts_Layer_A(innerch=innerch))
 
     def forward(self, x):
         x = self.preconv(x)
