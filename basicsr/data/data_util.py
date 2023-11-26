@@ -283,9 +283,9 @@ def nlq_SPAtrain_from_folder(folders, keys, filename_tmpl):
             gt_folder = root.rsplit('/', 1)[0]
             gt_file_name = f'{gt_folder[-3:]}_{file.split("_", 1)[1]}'
             gt_path = osp.join(gt_folder, gt_file_name)
-        paths.append(
-            dict([(f'{input_key}_path', input_path),
-                  (f'{gt_key}_path', gt_path)]))
+            paths.append(
+                dict([(f'{input_key}_path', input_path),
+                    (f'{gt_key}_path', gt_path)]))
     for item in paths:
         written_gt_path = item['gt_path']
         assert osp.exists(written_gt_path), (f'{written_gt_path} is not in '
