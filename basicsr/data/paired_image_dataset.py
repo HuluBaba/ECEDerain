@@ -74,6 +74,10 @@ class Dataset_PairedImage(data.Dataset):
                 self.paths = nlq_DDN_from_folder(
                     [self.lq_folder, self.gt_folder], ['lq', 'gt'],
                     self.filename_tmpl)
+            elif self.opt['sp_path_func'] == 'nlq_SPAtrain_from_folder':
+                self.paths = nlq_SPAtrain_from_folder(
+                    [self.lq_folder, self.gt_folder], ['lq', 'gt'],
+                    self.filename_tmpl)
             else:
                 raise Exception("no sp_path_func named {}".format(self.opt['sp_path_func']))
 
