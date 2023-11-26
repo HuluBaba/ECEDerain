@@ -5,7 +5,8 @@ from basicsr.data.data_util import (paired_paths_from_folder,
                                     paired_DP_paths_from_folder,
                                     paired_paths_from_lmdb,
                                     paired_paths_from_meta_info_file,
-                                    nlq_DDN_from_folder)
+                                    nlq_DDN_from_folder,
+                                    nlq_SPAtrain_from_folder)
 from basicsr.data.transforms import augment, paired_random_crop, paired_random_crop_DP, random_augmentation
 from basicsr.utils import FileClient, imfrombytes, img2tensor, padding, padding_DP, imfrombytesDP
 

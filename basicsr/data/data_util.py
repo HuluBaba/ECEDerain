@@ -2,6 +2,7 @@ import cv2
 cv2.setNumThreads(1)
 import numpy as np
 import torch
+import os
 from os import path as osp
 from torch.nn import functional as F
 
@@ -248,6 +249,48 @@ def paired_paths_from_folder(folders, keys, filename_tmpl):
         paths.append(
             dict([(f'{input_key}_path', input_path),
                   (f'{gt_key}_path', gt_path)]))
+    return paths
+
+
+def nlq_SPAtrain_from_folder(folders, keys, filename_tmpl):
+    """Generate paired paths from folders.
+
+    Args:
+        folders (list[str]): A list of folder path. The order of list should
+            be [input_folder, gt_folder].
+        keys (list[str]): A list of keys identifying folders. The order should
+            be in consistent with folders, e.g., ['lq', 'gt'].
+        filename_tmpl (str): Template for each filename. Note that the
+            template excludes the file extension. Usually the filename_tmpl is
+            for files in the input folder. USELESS HERE
+
+    Returns:
+        list[str]: Returned path list.
+    """
+    assert len(folders) == 2, (
+        'The len of folders should be 2 with [input_folder, gt_folder]. '
+        f'But got {len(folders)}')
+    assert len(keys) == 2, (
+        'The len of keys should be 2 with [input_key, gt_key]. '
+        f'But got {len(keys)}')
+    input_folder, gt_folder = folders
+    input_key, gt_key = keys
+
+    paths = []
+    for root, _, files in os.walk(input_folder):
+        for file in files:
+            input_path = osp.join(root, file)
+            gt_folder = root.rsplit('/', 1)[0]
+            gt_file_name = f'{gt_folder[-3:]}_{file.split("_", 1)[1]}'
+            gt_path = osp.join(gt_folder, gt_file_name)
+        paths.append(
+            dict([(f'{input_key}_path', input_path),
+                  (f'{gt_key}_path', gt_path)]))
+    for item in paths:
+        written_gt_path = item['gt_path']
+        assert osp.exists(written_gt_path), (f'{written_gt_path} is not in '
+                                           f'{gt_key}_paths.')
+            
     return paths
 
 def nlq_DDN_from_folder(folders, keys, filename_tmpl):
