@@ -6,7 +6,8 @@ from basicsr.data.data_util import (paired_paths_from_folder,
                                     paired_paths_from_lmdb,
                                     paired_paths_from_meta_info_file,
                                     nlq_DDN_from_folder,
-                                    nlq_SPAtrain_from_folder)
+                                    nlq_SPAtrain_from_folder,
+                                    nlq_SPAtest_from_folder)
 from basicsr.data.transforms import augment, paired_random_crop, paired_random_crop_DP, random_augmentation
 from basicsr.utils import FileClient, imfrombytes, img2tensor, padding, padding_DP, imfrombytesDP
 
@@ -76,6 +77,10 @@ class Dataset_PairedImage(data.Dataset):
                     self.filename_tmpl)
             elif self.opt['sp_path_func'] == 'nlq_SPAtrain_from_folder':
                 self.paths = nlq_SPAtrain_from_folder(
+                    [self.lq_folder, self.gt_folder], ['lq', 'gt'],
+                    self.filename_tmpl)
+            elif self.opt['sp_path_func'] == 'nlq_SPAtest_from_folder':
+                self.paths = nlq_SPAtest_from_folder(
                     [self.lq_folder, self.gt_folder], ['lq', 'gt'],
                     self.filename_tmpl)
             else:
