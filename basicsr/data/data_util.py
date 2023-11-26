@@ -281,6 +281,8 @@ def nlq_SPAtrain_from_folder(folders, keys, filename_tmpl):
         for file in files:
             input_path = osp.join(root, file)
             gt_mid_dir= root.rsplit('/', 2)[1]
+            if gt_mid_dir == '274-14':
+                break
             gt_file_name = f'{gt_mid_dir}_{file.split("_", 1)[1]}'
             gt_path = osp.join(gt_folder, gt_mid_dir, gt_file_name)
             paths.append(
