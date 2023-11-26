@@ -329,6 +329,8 @@ def nlq_SPAtrain_from_folder(folders, keys, filename_tmpl):
             if gt_mid_dir == '274-14':
                 break
             gt_file_name = f'{gt_mid_dir}_{file.split("_", 1)[1]}'
+            if gt_file_name == '007_8_1.png':
+                continue
             gt_path = osp.join(gt_folder, gt_mid_dir, gt_file_name)
             paths.append(
                 dict([(f'{input_key}_path', input_path),
