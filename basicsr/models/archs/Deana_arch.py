@@ -577,7 +577,7 @@ class OverlapPatchEmbed(nn.Module):
 
 
 ## Main Model
-class Andy(nn.Module):
+class Deana(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -590,7 +590,7 @@ class Andy(nn.Module):
                  num_ertrans=3,
                  ):
 
-        super(Andy, self).__init__()
+        super(Deana, self).__init__()
 
         self.patch_embed = Expert_Extraction(num_layers=3, innerch=dim)
         
@@ -690,7 +690,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
 
-    model = Andy()
+    model = Deana()
     model.to('cuda')
     summary(model,(3,128,128))
     getModelSize(model)
