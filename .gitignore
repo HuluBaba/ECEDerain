@@ -12,6 +12,8 @@ Options_test/
 !Options_test/example.yml
 train.sh
 test.sh
+*.sh
+*.out
 eval_all.sh
 test_DRS.sh
 tb_logger/
