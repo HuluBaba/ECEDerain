@@ -2,10 +2,10 @@
 --------------------------------------------
 Other variants of Plain should modify this pharagraph.
 --------------------------------------------
-Plain, the fundamental architecture of our research
+Deane, the plain + frequency
 its in-embedding is a 3x3 conv layer.
 its MSA module is plain channel-wise attention.
-its FFA module is plain two layer feed-forward.
+its FFA module is two layer 3*3 feed-forward with lpguide.
 no refinement
 its outprojection is a 3x3 conv layer 
 no EDC
@@ -106,7 +106,49 @@ class Attention(nn.Module):
         out = self.project_out(out)
         return out
 
-##  Plain FeedForward
+##  FeedForward
+class SideBranch(nn.Module):
+    def __init__(self,channel) -> None:
+        super().__init__()
+        # Linear layer for channel with bias
+        self.linear = nn.Conv2d(channel, 1, kernel_size=1, bias=True)
+        # init weight to make the output of linear layer to be 1
+        self.linear.weight.data.fill_(0)
+        self.linear.bias.data.fill_(1)
+
+    def forward(self, x):
+        # box filter 3x3 by conv2d
+        x = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1, count_include_pad=False)
+        # Linear layer for channel with bias
+        x = self.linear(x)
+        x = F.relu(x)
+        return x
+
+class LPGuideFeedForward(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor, bias):
+        super(LPGuideFeedForward, self).__init__()
+
+        hidden_features = int(dim * ffn_expansion_factor)
+        self.project_in = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
+        self.sidebranch = SideBranch(2*hidden_features)
+
+        self.dconv1 = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.dconv2 = nn.Conv2d(4*hidden_features, 2*hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+
+        self.relu1 = nn.ReLU(inplace=True)
+        self.relu2 = nn.ReLU(inplace=True)
+
+        self.project_out = nn.Conv2d(2*hidden_features, dim, 1, 1, 0, bias=bias)
+
+    def forward(self, x):
+        x = self.project_in(x)
+        lp_guide = self.sidebranch(x)
+        x = self.relu1(self.dconv1(x))
+        x = self.relu2(self.dconv2(x))
+        x = self.project_out(x)
+        x = x*lp_guide
+        return x
+
 class FeedForward(nn.Module):
     def __init__(self, dim, ffn_expansion_factor, bias):
         super(FeedForward, self).__init__()
@@ -139,7 +181,7 @@ class TransformerBlock(nn.Module):
         self.norm1 = LayerNorm(dim, LayerNorm_type)
         self.attn = Attention(dim, num_heads, bias)
         self.norm2 = LayerNorm(dim, LayerNorm_type)
-        self.ffn = FeedForward(dim, ffn_expansion_factor, bias)
+        self.ffn = LPGuideFeedForward(dim, ffn_expansion_factor, bias) if lp_guide else FeedForward(dim, ffn_expansion_factor, bias)
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))

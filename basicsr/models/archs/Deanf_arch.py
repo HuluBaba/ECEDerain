@@ -8,7 +8,7 @@ its MSA module is plain channel-wise attention.
 its FFA module is plain two layer feed-forward.
 no refinement
 its outprojection is a 3x3 conv layer 
-no EDC
+EDC: Expert Extract
 '''
 
 import cv2
@@ -184,6 +184,118 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 
+## Error Compensation Module
+NUM_OPS_A = 5
+NUM_OPS_B = 5
+
+class SESideBranch(nn.Module):
+    def __init__(self, input_dim, mid_ch, output_dim):
+        super(SESideBranch, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, mid_ch),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(mid_ch, output_dim)
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y)
+        return y
+
+class Experts_Layer_A(torch.nn.Module):
+    def __init__(self, innerch=64):
+        super(Experts_Layer_A, self).__init__()
+        self.weight_gen = SESideBranch(innerch,2*innerch,NUM_OPS_A)
+        self.dialated1 = nn.Sequential(nn.Conv2d(innerch,innerch,3,1,2,dilation=2,groups=innerch),
+                                       nn.Conv2d(innerch,innerch,1,1,0))
+        self.dialated2 = nn.Sequential(nn.Conv2d(innerch,innerch,5,1,4,dilation=2,groups=innerch),
+                                       nn.Conv2d(innerch,innerch,1,1,0))
+        self.dialated3 = nn.Sequential(nn.Conv2d(innerch,innerch,3,1,3,dilation=3,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0))
+        self.avgpool = nn.AvgPool2d(3,1,1,count_include_pad=False)
+        self.maxpool = nn.MaxPool2d(3,1,1)
+        self.postprocess = nn.Sequential(nn.Conv2d(innerch,innerch,1,1,0),nn.ReLU())
+
+    def forward(self, x):
+        weight = self.weight_gen(x)     # weight: [batch, NUM_OPS]
+        x1 = self.dialated1(x)
+        x2 = self.dialated2(x)
+        x3 = self.dialated3(x)
+        x4 = self.avgpool(x)
+        x5 = self.maxpool(x)        # x1~x5: [batch, innerch, h, w]
+        x = torch.stack([x1,x2,x3,x4,x5], dim=1)       # x: [batch, NUM_OPS, innerch, h, w], weights: [batch, NUM_OPS]
+        y = torch.sum(x*weight.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1), dim=1)                         # y: [batch, innerch, h, w]
+        y = self.postprocess(y)                                 # y: [batch, innerch, h, w]
+        return y
+
+class Experts_Layer_B(torch.nn.Module):
+    def __init__(self, innerch=64):
+        super(Experts_Layer_B, self).__init__()
+        self.weight_gen = SESideBranch(innerch,2*innerch,NUM_OPS_B)
+        self.separable1 = nn.Sequential(nn.Conv2d(innerch,innerch,3,1,1,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0),
+                                        nn.ReLU(),
+                                        nn.Conv2d(innerch,innerch,3,1,1,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0))
+        self.separable2 = nn.Sequential(nn.Conv2d(innerch,innerch,5,1,2,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0),
+                                        nn.ReLU(),
+                                        nn.Conv2d(innerch,innerch,5,1,2,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0))
+        self.separable3 = nn.Sequential(nn.Conv2d(innerch,innerch,7,1,3,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0),
+                                        nn.ReLU(),
+                                        nn.Conv2d(innerch,innerch,7,1,3,groups=innerch),
+                                        nn.Conv2d(innerch,innerch,1,1,0))
+        self.avgpool = nn.AvgPool2d(3,1,1,count_include_pad=False)
+        self.maxpool = nn.MaxPool2d(3,1,1)
+        self.postprocess = nn.Sequential(nn.Conv2d(innerch,innerch,1,1,0),nn.ReLU())
+
+    def forward(self, x):
+        weight = self.weight_gen(x)     # weight: [batch, NUM_OPS]
+        x1 = self.separable1(x)
+        x2 = self.separable2(x)
+        x3 = self.separable3(x)
+        x4 = self.avgpool(x)
+        x5 = self.maxpool(x)        # x1~x5: [batch, innerch, h, w]
+        x = torch.stack([x1,x2,x3,x4,x5], dim=1)       # x: [batch, NUM_OPS, innerch, h, w], weights: [batch, NUM_OPS]
+        y = torch.sum(x*weight.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1), dim=1)                         # y: [batch, innerch, h, w]
+        y = self.postprocess(y)                                 # y: [batch, innerch, h, w]
+        return y
+
+class Expert_Extraction(torch.nn.Module):
+    def __init__(self, num_layers=3, innerch=64):
+        super(Expert_Extraction, self).__init__()
+        self.preconv = nn.Conv2d(3, innerch, 3, 1, 1)
+        self.prerelu = nn.ReLU()
+        self.experts = torch.nn.ModuleList()
+        for i in range(num_layers):
+            self.experts.append(Experts_Layer_B(innerch=innerch))
+            self.experts.append(Experts_Layer_A(innerch=innerch))
+
+    def forward(self, x):
+        x = self.preconv(x)
+        x = self.prerelu(x)
+        for i in range(len(self.experts)):
+            res = x
+            x = self.experts[i](x)
+            x = x + res
+            x = F.relu(x)
+        return x
+
+class Error_Compensator(nn.Module):
+    def __init__(self, num_layers=3, innerch=64):
+        super(Error_Compensator, self).__init__()
+        self.expert_extraction = Expert_Extraction(num_layers=num_layers, innerch=innerch)
+        self.postconv = nn.Conv2d(innerch, 3, 3, 1, 1)
+
+    def forward(self, x):
+        x = self.expert_extraction(x)
+        x = self.postconv(x)
+        return x
+
 ## Main Model
 class Plain(nn.Module):
     def __init__(self,
@@ -241,6 +353,8 @@ class Plain(nn.Module):
 
         self.output = nn.Conv2d(int(dim * 2 ** 1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
+        self.compensator = Error_Compensator(num_layers=3, innerch=dim)
+
 
     def forward(self, inp_img):
 
@@ -271,7 +385,9 @@ class Plain(nn.Module):
         out_dec_level1 = self.decoder_level1(inp_dec_level1)
         pred_b = self.output(out_dec_level1)+inp_img
 
-        return pred_b
+        output = pred_b+self.compensator(pred_b)
+
+        return output
 
 if __name__=="__main__":
     def getModelSize(model):

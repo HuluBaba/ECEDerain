@@ -8,7 +8,7 @@ its MSA module is plain channel-wise attention.
 its FFA module is plain two layer feed-forward.
 no refinement
 its outprojection is a 3x3 conv layer 
-no EDC
+EDC like RLNet
 '''
 
 import cv2
@@ -21,6 +21,9 @@ import numbers
 from torchsummary import summary
 
 from einops import rearrange
+
+
+
 
 ##  Generally used mini-modules
 def to_3d(x):
@@ -184,6 +187,90 @@ class OverlapPatchEmbed(nn.Module):
         return x
 
 
+## RL-style EDC
+class GCANet(nn.Module):
+  def __init__(self, in_c=20, out_c=3, only_residual=True):
+    super(GCANet, self).__init__()
+   
+    self.conv1 = nn.Conv2d(40, 32, 3, 1, 1)
+
+    self.res1 = ResidualBlock(32, dilation=1)
+    self.res2 = ResidualBlock(32, dilation=1)
+    self.res3 = ResidualBlock(32, dilation=1)
+    self.res4 = ResidualBlock(32, dilation=1)
+    self.res5 = ResidualBlock(32, dilation=1)
+    self.res6 = ResidualBlock(32, dilation=1)
+    self.res7 = ResidualBlock(32, dilation=1)
+
+    self.gate = nn.Conv2d(32 * 3, 32, 3, 1, 1, bias=True)
+
+    self.deconv1 = nn.Conv2d(32, 16, 3, 1, 1)
+    self.deconv2 = nn.Conv2d(16, out_c, 3, 1, 1)
+    self.relu = nn.LeakyReLU(0.2, inplace=True)
+
+  def forward(self, x):
+    y = self.relu(self.conv1(x))
+    
+    y1 = self.res1(y)
+    y = self.res2(y)
+    y = self.res3(y)
+    y2 = self.res4(y)
+    y = self.res5(y2)
+    y = self.res6(y)
+    y3 = self.res7(y)
+
+    gates = self.relu(self.gate(torch.cat((y1, y2, y3), dim=1)))
+
+    y = self.relu(self.deconv1(gates))
+    y = torch.sigmoid(self.deconv2(y))
+
+    return y
+
+class ResidualBlock(nn.Module):
+  def __init__(self, channel_num, dilation=1, group=1):
+    super(ResidualBlock, self).__init__()
+    self.conv1 = nn.Conv2d(channel_num, channel_num, kernel_size=3, stride=1, padding=1, bias=True)
+    self.norm1 = nn.GroupNorm(num_groups=8, num_channels=32)
+    self.relu = nn.LeakyReLU(0.2, inplace=True)
+
+  def forward(self, x):
+    xs = self.norm1(self.conv1(x))
+    xs = self.relu(xs+x)
+    return xs
+
+class RLCompensator(nn.Module):
+    def __init__(self, in_c=6):
+        super(RLCompensator, self).__init__()
+        self.convx1 = nn.Conv2d(in_c, 20, 1, 1, 0)
+        self.relu=nn.LeakyReLU(0.2, inplace=True)
+        self.upsample = F.upsample_nearest
+        self.conv1010 = nn.Conv2d(36, 1, kernel_size=1,stride=1,padding=0)  # 1mm
+        self.conv1020 = nn.Conv2d(36, 1, kernel_size=1,stride=1,padding=0)  # 1mm
+        self.conv1030 = nn.Conv2d(36, 1, kernel_size=1,stride=1,padding=0)  # 1mm
+        self.conv1040 = nn.Conv2d(36, 1, kernel_size=1,stride=1,padding=0)  # 1mm
+        self.gconv = GCANet()
+
+    def forward(self,x):
+        x9 = self.relu(self.convx1(x))
+        shape_out = x9.data.size()
+        shape_out = shape_out[2:4]
+        x101 = F.avg_pool2d(x9, 32)
+        x102 = F.avg_pool2d(x9, 16)
+        x103 = F.avg_pool2d(x9, 8)
+        x104 = F.avg_pool2d(x9, 4)
+
+        x1010 = self.upsample(self.relu((self.conv1010(x101))), size=shape_out)
+        x1020 = self.upsample(self.relu((self.conv1020(x102))), size=shape_out)
+        x1030 = self.upsample(self.relu((self.conv1030(x103))), size=shape_out)
+        x1040 = self.upsample(self.relu((self.conv1040(x104))), size=shape_out)
+
+        x10 = torch.cat((x1010, x1020, x1030, x1040, x9), 1)
+
+        x10 = self.gconv(x10)
+
+        return x10
+
+
 ## Main Model
 class Plain(nn.Module):
     def __init__(self,
@@ -241,6 +328,8 @@ class Plain(nn.Module):
 
         self.output = nn.Conv2d(int(dim * 2 ** 1), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
+        self.compensator = RLCompensator()
+
 
     def forward(self, inp_img):
 
@@ -269,9 +358,11 @@ class Plain(nn.Module):
         inp_dec_level1 = self.up2_1(out_dec_level2)
         inp_dec_level1 = torch.cat([inp_dec_level1, out_enc_level1], 1)
         out_dec_level1 = self.decoder_level1(inp_dec_level1)
-        pred_b = self.output(out_dec_level1)+inp_img
+        pred_b = self.output(out_dec_level1)
 
-        return pred_b
+        output = self.compensator(torch.cat([pred_b, inp_img], 1))
+
+        return output
 
 if __name__=="__main__":
     def getModelSize(model):

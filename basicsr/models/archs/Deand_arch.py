@@ -2,10 +2,10 @@
 --------------------------------------------
 Other variants of Plain should modify this pharagraph.
 --------------------------------------------
-Plain, the fundamental architecture of our research
+Deand, the plain + bigkernel
 its in-embedding is a 3x3 conv layer.
 its MSA module is plain channel-wise attention.
-its FFA module is plain two layer feed-forward.
+its FFA module is two layer 5*5 feed-forward.
 no refinement
 its outprojection is a 3x3 conv layer 
 no EDC
@@ -114,8 +114,8 @@ class FeedForward(nn.Module):
         hidden_features = int(dim * ffn_expansion_factor)
         self.project_in = nn.Conv2d(dim, 2*hidden_features, 1, 1, 0, bias=bias)
 
-        self.dconv1 = nn.Conv2d(2*hidden_features, 4*hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
-        self.dconv2 = nn.Conv2d(4*hidden_features, 2*hidden_features, 3, 1, 1, groups=hidden_features, bias=bias)
+        self.dconv1 = nn.Conv2d(2*hidden_features, 4*hidden_features, 5, 1, 2, groups=hidden_features, bias=bias)
+        self.dconv2 = nn.Conv2d(4*hidden_features, 2*hidden_features, 5, 1, 2, groups=hidden_features, bias=bias)
 
         self.relu1 = nn.ReLU(inplace=True)
         self.relu2 = nn.ReLU(inplace=True)
