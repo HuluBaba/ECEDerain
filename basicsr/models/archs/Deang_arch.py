@@ -241,7 +241,7 @@ class ResidualBlock(nn.Module):
 class RLCompensator(nn.Module):
     def __init__(self, in_c=6):
         super(RLCompensator, self).__init__()
-        self.convx1 = nn.Conv2d(in_c, 20, 1, 1, 0)
+        self.convx1 = nn.Conv2d(in_c, 36, 1, 1, 0)
         self.relu=nn.LeakyReLU(0.2, inplace=True)
         self.upsample = F.upsample_nearest
         self.conv1010 = nn.Conv2d(36, 1, kernel_size=1,stride=1,padding=0)  # 1mm
@@ -272,7 +272,7 @@ class RLCompensator(nn.Module):
 
 
 ## Main Model
-class Plain(nn.Module):
+class Deang(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -285,7 +285,7 @@ class Plain(nn.Module):
                  num_ertrans=0,
                  ):
 
-        super(Plain, self).__init__()
+        super(Deang, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -381,7 +381,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
 
-    model = Plain()
+    model = Deang()
     model.to('cuda')
     summary(model,(3,128,128))
     getModelSize(model)

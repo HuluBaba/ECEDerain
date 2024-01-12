@@ -227,7 +227,7 @@ class OverlapPatchEmbed(nn.Module):
 
 
 ## Main Model
-class Plain(nn.Module):
+class Deane(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -240,7 +240,7 @@ class Plain(nn.Module):
                  num_ertrans=0,
                  ):
 
-        super(Plain, self).__init__()
+        super(Deane, self).__init__()
 
         self.patch_embed = OverlapPatchEmbed(inp_channels, dim)
         
@@ -332,7 +332,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
 
-    model = Plain()
+    model = Deane()
     model.to('cuda')
     summary(model,(3,128,128))
     getModelSize(model)
