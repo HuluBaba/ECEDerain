@@ -486,5 +486,28 @@ class FADformer(FADBackbone):
         )
 
 if __name__ == '__main__':
+    def getModelSize(model):
+        param_size = 0
+        param_sum = 0
+        for param in model.parameters():
+            param_size += param.nelement() * param.element_size()
+            param_sum += param.nelement()
+        buffer_size = 0
+        buffer_sum = 0
+        for buffer in model.buffers():
+            buffer_size += buffer.nelement() * buffer.element_size()
+            buffer_sum += buffer.nelement()
+        all_size = (param_size + buffer_size) / 1024 / 1024
+        print(f"Total size of the {model.__class__.__name__} :{all_size:.3f} MB")
+        return (param_size, param_sum, buffer_size, buffer_sum, all_size)
     model = FADformer()
-    summary(model, (3, 256, 256))
+    model.to('cuda')
+    # summary(model,(3,128,128))
+    getModelSize(model)
+    # Count the size of each submodule
+    for name, module in model.named_children():
+        print(f"Total size of the {name} :{getModelSize(module)[-1]:.3f} MB")
+    input_tensor = torch.rand((2,3,128,128)).to('cuda')
+    print(input_tensor.shape)
+    output_tensor = model(input_tensor)
+    print(output_tensor.shape)
