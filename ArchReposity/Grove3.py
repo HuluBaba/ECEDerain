@@ -2,7 +2,7 @@
 --------------------------------------------
 Other variants of Plain should modify this pharagraph.
 --------------------------------------------
-Grove2, STS+FGF +refinement, no EDC
+Grove3, STS+FGF +refinement, no EDC
 its in-embedding is a Expert Extraction.
 its MSA module is Soft Threshold Sparse attention.
 its FFA module is full FDF module.
@@ -438,11 +438,11 @@ class Genf(nn.Module):
         super(Genf, self).__init__()
     
     def forward(self, x):
-        max_channel = torch.max(x, dim=1, keepdim=True)
-        min_channel = torch.min(x, dim=1, keepdim=True)
-        res_channel = max_channel[0] - min_channel[0]
-        return res_channel
-        # return x
+        # max_channel = torch.max(x, dim=1, keepdim=True)
+        # min_channel = torch.min(x, dim=1, keepdim=True)
+        # res_channel = max_channel[0] - min_channel[0]
+        # return res_channel
+        return x
 
 class Freq_Fusion(nn.Module):
     def __init__(
@@ -514,12 +514,12 @@ class FourierUnit(nn.Module):
 
 
 class IDI(nn.Module):
-    def __init__(self, dim=1):
+    def __init__(self, dim=3):
         super(IDI, self).__init__()
         self.conv_init = nn.Sequential(nn.Conv2d(dim, dim * 2, 1),nn.GELU())
         self.freq_fusion = Freq_Fusion(dim)
         self.conv = nn.Sequential(nn.Conv2d(dim * 2, dim, 1),nn.GELU())
-        self.se = SESideBranch(dim, dim, dim)
+        self.se = SESideBranch(dim, 2, dim)
         self.sigmoid = nn.Sigmoid()
     
     def forward(self, x):
@@ -531,13 +531,11 @@ class IDI(nn.Module):
         return x
 
 class fDownsample(nn.Module):
-    def __init__(self, input_dim=4, output_dim=1, kernel_size=4, stride=2):
+    def __init__(self, dim):
         super().__init__()
-        self.input_dim = input_dim
-        self.embed_dim = output_dim
 
         self.proj = nn.Sequential(nn.PixelUnshuffle(2),
-                                  nn.Conv2d(4, 1, kernel_size=3, stride=1, padding=1, bias=False),
+                                  nn.Conv2d(dim*4, dim*1, kernel_size=3, stride=1, padding=1, bias=False),
                                   )
 
 
@@ -546,12 +544,10 @@ class fDownsample(nn.Module):
         return x
 
 class fUpsample(nn.Module):
-    def __init__(self, input_dim=4, output_dim=1, kernel_size=4, stride=2):
+    def __init__(self, dim):
         super().__init__()
-        self.input_dim = input_dim
-        self.embed_dim = output_dim
 
-        self.proj = nn.Sequential(nn.Conv2d(1, 4, kernel_size=3, stride=1, padding=1, bias=False),
+        self.proj = nn.Sequential(nn.Conv2d(dim*1, dim*4, kernel_size=3, stride=1, padding=1, bias=False),
                     nn.PixelShuffle(2),
                                   )
 
@@ -618,13 +614,13 @@ class Stage(nn.Module):
                              LayerNorm_type=LayerNorm_type, lp_guide=lp_guide, sb_guide=sb_guide) for i in range(num_blocks)])
     
     def forward(self,x,f):
-        used_f = f
+        used_f = f.mean(dim=1, keepdim=True)
         input_items = (x,used_f)
         output_items = self.main(input_items)
         x, used_f = output_items
         return x
 
-class Grove2(nn.Module):
+class Grove3(nn.Module):
     def __init__(self,
                  inp_channels=3,
                  out_channels=3,
@@ -637,7 +633,7 @@ class Grove2(nn.Module):
                  num_ertrans=3,
                  ):
 
-        super(Grove2, self).__init__()
+        super(Grove3, self).__init__()
 
         
         self.patch_embed = Expert_Extraction(num_layers=3, innerch=dim)
@@ -647,39 +643,39 @@ class Grove2(nn.Module):
         self.encoder_level1 = Stage(dim, heads[0], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[0], lp_guide=True, sb_guide=True)
 
         self.down1_2 = Downsample(dim)  ## From Level 1 to Level 2
-        self.fdown1_2 = fDownsample()
+        self.fdown1_2 = fDownsample(3)
 
         self.fencoder_level2 = IDI()
         self.encoder_level2 = Stage(dim*2, heads[1], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[1], lp_guide=False, sb_guide=True)
 
         self.down2_3 = Downsample(int(dim * 2 ** 1))  ## From Level 2 to Level 3
-        self.fdown2_3 = fDownsample()
+        self.fdown2_3 = fDownsample(3)
 
         self.fencoder_level3 = IDI()
         self.encoder_level3 = Stage(dim*4, heads[2], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[2], lp_guide=False, sb_guide=True)
 
         self.down3_4 = Downsample(int(dim * 2 ** 2))  ## From Level 3 to Level 4
-        self.fdown3_4 = fDownsample()
+        self.fdown3_4 = fDownsample(3)
 
         self.flatent = IDI()
         self.latent = Stage(dim*8, heads[3], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[3], lp_guide=False, sb_guide=True)
 
         self.up4_3 = Upsample(int(dim * 2 ** 3))  ## From Level 4 to Level 3
-        self.fup4_3 = fUpsample()
+        self.fup4_3 = fUpsample(3)
         self.reduce_chan_level3 = nn.Conv2d(int(dim * 2 ** 3), int(dim * 2 ** 2), kernel_size=1, bias=bias)
 
         self.fdecoder_level3 = IDI()
         self.decoder_level3 = Stage(dim*4, heads[2], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[2], lp_guide=False, sb_guide=True)
 
         self.up3_2 = Upsample(int(dim * 2 ** 2))  ## From Level 3 to Level 2
-        self.fup3_2 = fUpsample()
+        self.fup3_2 = fUpsample(3)
         self.reduce_chan_level2 = nn.Conv2d(int(dim * 2 ** 2), int(dim * 2 ** 1), kernel_size=1, bias=bias)
 
         self.fdecoder_level2 = IDI()
         self.decoder_level2 = Stage(dim*2, heads[1], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[1], lp_guide=False, sb_guide=True)
 
         self.up2_1 = Upsample(int(dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
-        self.fup2_1 = fUpsample()
+        self.fup2_1 = fUpsample(3)
 
         self.fdecoder_level1 = IDI()
         self.decoder_level1 = Stage(dim*2, heads[0], ffn_expansion_factor, bias, LayerNorm_type, num_blocks[0]+num_ertrans, lp_guide=True, sb_guide=True)
@@ -742,47 +738,6 @@ class Grove2(nn.Module):
 
 
 
-
-
-
-
-    # def forward(self, inp_img):
-
-    #     inp_enc_level1 = self.patch_embed(inp_img)
-    #     # fi_1 = self.genf(inp_img)
-
-    #     out_enc_level1 = self.encoder_level1(inp_enc_level1)  
-
-    #     inp_enc_level2 = self.down1_2(out_enc_level1)
-    #     out_enc_level2 = self.encoder_level2(inp_enc_level2)
-
-    #     inp_enc_level3 = self.down2_3(out_enc_level2)
-    #     out_enc_level3 = self.encoder_level3(inp_enc_level3)
-
-    #     inp_enc_level4 = self.down3_4(out_enc_level3)
-    #     latent = self.latent(inp_enc_level4)
-
-    #     inp_dec_level3 = self.up4_3(latent)
-    #     inp_dec_level3 = torch.cat([inp_dec_level3, out_enc_level3], 1)
-    #     inp_dec_level3 = self.reduce_chan_level3(inp_dec_level3)
-    #     out_dec_level3 = self.decoder_level3(inp_dec_level3)
-
-    #     inp_dec_level2 = self.up3_2(out_dec_level3)
-    #     inp_dec_level2 = torch.cat([inp_dec_level2, out_enc_level2], 1)
-    #     inp_dec_level2 = self.reduce_chan_level2(inp_dec_level2)
-    #     out_dec_level2 = self.decoder_level2(inp_dec_level2)
-
-    #     inp_dec_level1 = self.up2_1(out_dec_level2)
-    #     inp_dec_level1 = torch.cat([inp_dec_level1, out_enc_level1], 1)
-    #     out_dec_level1 = self.decoder_level1(inp_dec_level1)
-    #     pred_b = self.output(out_dec_level1)
-
-    #     output = pred_b + inp_img
-
-    #     return output
-
-
-
 if __name__=="__main__":
     def getModelSize(model):
         param_size = 0
@@ -800,7 +755,7 @@ if __name__=="__main__":
         return (param_size, param_sum, buffer_size, buffer_sum, all_size)
 
 
-    model = Grove2()
+    model = Grove3()
     model.to('cuda')
     # summary(model,(3,128,128))
     getModelSize(model)
